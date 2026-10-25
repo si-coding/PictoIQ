@@ -20,6 +20,7 @@ void main() {
     const settings = AppSettings();
     expect(settings.manualSelectionOnly, isFalse);
     expect(settings.useFaceSignals, isTrue);
+    expect(settings.groupSessions, isFalse);
   });
 
   test('returns defaults when nothing was saved', () async {
@@ -27,7 +28,11 @@ void main() {
   });
 
   test('saves and loads settings', () async {
-    const saved = AppSettings(manualSelectionOnly: true, useFaceSignals: false);
+    const saved = AppSettings(
+      manualSelectionOnly: true,
+      useFaceSignals: false,
+      groupSessions: true,
+    );
     await store.save(saved);
     expect(await store.load(), saved);
     expect(
@@ -53,8 +58,9 @@ void main() {
 
   test('copyWith changes only what is given', () {
     const base = AppSettings(manualSelectionOnly: true);
-    final changed = base.copyWith(useFaceSignals: false);
+    final changed = base.copyWith(useFaceSignals: false, groupSessions: true);
     expect(changed.manualSelectionOnly, isTrue);
     expect(changed.useFaceSignals, isFalse);
+    expect(changed.groupSessions, isTrue);
   });
 }

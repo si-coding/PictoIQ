@@ -172,6 +172,69 @@ void main() {
     });
   });
 
+  group('same-session grouping', () {
+    test('links different poses minutes apart that burst mode would not', () {
+      final shots = [
+        _shot('a', 0, 0),
+        _shot('b', _bits(14), 120),
+        _shot('c', _bits(16), 300),
+      ];
+      expect(clusterSimilar(shots), isEmpty);
+      final clusters = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.session,
+      );
+      expect(_names(shots, clusters), [
+        ['a', 'b', 'c'],
+      ]);
+      final evidence = clusters.single.evidence;
+      expect(evidence.isSession, isTrue);
+      expect(evidence.notes.first, contains('Same session'));
+    });
+
+    test('session groups are never high confidence', () {
+      final shots = [_shot('a', 0, 0), _shot('b', 0, 1)];
+      final cluster = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.session,
+      ).single;
+      expect(cluster.evidence.confidence, SimilarityConfidence.medium);
+    });
+
+    test('still respects the ten-minute window', () {
+      final shots = [_shot('a', 0, 0), _shot('b', 0, 601)];
+      expect(
+        clusterSimilar(shots, thresholds: SimilarityThresholds.session),
+        isEmpty,
+      );
+    });
+
+    test('photos without a time only link at the strict distance', () {
+      final shots = [
+        _shot('a', 0, 0, source: CaptureSource.unknown),
+        _shot('b', _bits(14), 0, source: CaptureSource.unknown),
+      ];
+      expect(
+        clusterSimilar(shots, thresholds: SimilarityThresholds.session),
+        isEmpty,
+      );
+    });
+
+    test('very different spread is low confidence', () {
+      final shots = [
+        _shot('a', 0, 0),
+        _shot('b', _bits(14), 100),
+        _shot('c', _bits(28), 200),
+      ];
+      final cluster = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.session,
+      ).single;
+      expect(cluster.evidence.maxDistance, 28);
+      expect(cluster.evidence.confidence, SimilarityConfidence.low);
+    });
+  });
+
   group('evaluateGrouping', () {
     test('counts pairwise precision and recall', () {
       final metrics = evaluateGrouping(

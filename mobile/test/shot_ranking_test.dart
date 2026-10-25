@@ -147,6 +147,138 @@ void main() {
     });
   });
 
+  group('disqualifiers and finalists', () {
+    const clean = FaceSignals(count: 1, eyesOpenMin: 0.9, smileAverage: 0.8);
+
+    test('a cut-off face rules a photo out even if it is sharper', () {
+      final ranking = rankShots([
+        _shot(
+          'cut',
+          sharpness: 100,
+          faces: const FaceSignals(
+            count: 1,
+            eyesOpenMin: 0.9,
+            smileAverage: 0.8,
+            edgeCutoff: true,
+          ),
+        ),
+        _shot('ok', sharpness: 95, faces: clean),
+      ]);
+      expect(ranking.best.id, 'ok');
+      expect(
+        ranking.shotFor('cut')!.disqualifiers,
+        contains('a face is cut off at the edge'),
+      );
+      expect(ranking.shotFor('cut')!.isFinalist, isFalse);
+      expect(ranking.isClearWinner, isTrue);
+    });
+
+    test('closed eyes and looking away are faults; a slight turn is not', () {
+      final ranking = rankShots([
+        _shot(
+          'closed',
+          faces: const FaceSignals(
+            count: 2,
+            eyesOpenMin: 0.1,
+            smileAverage: null,
+          ),
+        ),
+        _shot(
+          'away',
+          faces: const FaceSignals(
+            count: 2,
+            eyesOpenMin: 0.9,
+            smileAverage: null,
+            lookingAwayMax: 40,
+          ),
+        ),
+        _shot(
+          'slight',
+          faces: const FaceSignals(
+            count: 2,
+            eyesOpenMin: 0.9,
+            smileAverage: null,
+            lookingAwayMax: 20,
+          ),
+        ),
+      ]);
+      expect(ranking.shotFor('closed')!.disqualifiers, ['eyes closed']);
+      expect(ranking.shotFor('away')!.disqualifiers, [
+        'someone is looking away',
+      ]);
+      expect(ranking.shotFor('slight')!.isDisqualified, isFalse);
+      expect(ranking.best.id, 'slight');
+    });
+
+    test('very blurry or washed-out photos are ruled out', () {
+      final ranking = rankShots([
+        _shot('good', sharpness: 100),
+        _shot('blur', sharpness: 20),
+        _shot('white', highlightClip: 0.3),
+      ]);
+      expect(ranking.shotFor('blur')!.disqualifiers, [
+        'too blurry compared with the others',
+      ]);
+      expect(ranking.shotFor('white')!.disqualifiers, ['washed out']);
+      expect(ranking.best.id, 'good');
+      expect(ranking.shots.last.isDisqualified, isTrue);
+    });
+
+    test('when every photo has a fault there are no finalists', () {
+      const closed = FaceSignals(count: 1, eyesOpenMin: 0.1, smileAverage: null);
+      final ranking = rankShots([
+        _shot('a', faces: closed),
+        _shot('b', faces: closed),
+      ]);
+      expect(ranking.finalists, isEmpty);
+      expect(ranking.isClearWinner, isFalse);
+      expect(ranking.headline, startsWith('Every shot has a fault'));
+    });
+
+    test('at most three close photos become finalists', () {
+      final ranking = rankShots([
+        _shot('a', sharpness: 100),
+        _shot('b', sharpness: 95),
+        _shot('c', sharpness: 90),
+        _shot('d', sharpness: 85),
+        _shot('e', sharpness: 40),
+      ]);
+      expect(ranking.finalists.map((s) => s.id), ['a', 'b', 'c']);
+      expect(ranking.isClearWinner, isFalse);
+      expect(ranking.headline, '3 strong candidates; you decide');
+    });
+
+    test('a photo far behind the best is not a finalist', () {
+      final ranking = rankShots([
+        _shot('a', sharpness: 100),
+        _shot('b', sharpness: 40),
+      ]);
+      expect(ranking.finalists.map((s) => s.id), ['a']);
+      expect(ranking.isClearWinner, isTrue);
+    });
+
+    test('scores never go below zero with several faults', () {
+      final ranking = rankShots([
+        _shot('best'),
+        _shot(
+          'bad',
+          sharpness: 1,
+          highlightClip: 0.5,
+          shadowClip: 0.6,
+          faces: const FaceSignals(
+            count: 1,
+            eyesOpenMin: 0,
+            smileAverage: 0,
+            edgeCutoff: true,
+            lookingAwayMax: 80,
+          ),
+        ),
+      ]);
+      expect(ranking.shotFor('bad')!.score, inInclusiveRange(0, 100));
+      expect(ranking.shotFor('bad')!.disqualifiers.length, greaterThan(2));
+    });
+  });
+
   group('measureImage', () {
     test('a crisp image measures sharper than a blurred copy', () {
       final crisp = measureImage(_checkerboard());
