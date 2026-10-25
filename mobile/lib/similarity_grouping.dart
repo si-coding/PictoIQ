@@ -93,7 +93,24 @@ class SimilarityThresholds {
     this.highSpanMs = 10 * 1000,
     this.mediumDistance = 8,
     this.maxClusterForDiameter = 300,
+    this.isSession = false,
   });
+
+  /// Looser grouping for "same session" photos: the same people and place
+  /// over several minutes, where poses differ. Groups are never rated High,
+  /// because look-alike photos minutes apart are not duplicates, and the hash
+  /// distances are untuned starting points.
+  static const session = SimilarityThresholds(
+    maxLinkDistance: 18,
+    windowMs: 10 * 60 * 1000,
+    highDistance: -1,
+    highSpanMs: 0,
+    mediumDistance: 26,
+    isSession: true,
+  );
+
+  /// True for the looser session settings, so the UI can say so.
+  final bool isSession;
 
   /// Two photos may be linked when their hashes differ by at most this many
   /// bits (out of 64).
@@ -137,9 +154,13 @@ class SimilarityEvidence {
     required this.spanMs,
     required this.captureSource,
     required this.size,
+    this.isSession = false,
   });
 
   final SimilarityConfidence confidence;
+
+  /// True when the group came from the looser same-session settings.
+  final bool isSession;
 
   /// Largest hash difference between any two photos in the group (0-64).
   final int maxDistance;
@@ -159,6 +180,7 @@ class SimilarityEvidence {
               ? 'Very similar content'
               : 'Loosely similar content');
     final result = <String>[
+      if (isSession) 'Same session: poses and framing may differ',
       '$content (up to $maxDistance of 64 differences)',
     ];
     final span = spanMs;
@@ -250,8 +272,12 @@ List<SimilarityCluster> clusterSimilar(
       if (earlier.captureSource != current.captureSource) break;
       final gap = current.capturedAt - earlier.capturedAt;
       if (timed && gap > thresholds.windowMs) break;
-      if (hammingDistance(earlier.visualHash, current.visualHash) <=
-          thresholds.maxLinkDistance) {
+      // Without a capture time there is nothing to keep loose matches local,
+      // so session grouping falls back to the strict distance.
+      final limit = timed || !thresholds.isSession
+          ? thresholds.maxLinkDistance
+          : const SimilarityThresholds().maxLinkDistance;
+      if (hammingDistance(earlier.visualHash, current.visualHash) <= limit) {
         final rootCurrent = find(i);
         final rootEarlier = find(j);
         if (rootCurrent != rootEarlier) parent[rootCurrent] = rootEarlier;
@@ -327,6 +353,7 @@ SimilarityEvidence _evidenceFor(
     spanMs: spanMs,
     captureSource: source,
     size: members.length,
+    isSession: thresholds.isSession,
   );
 }
 

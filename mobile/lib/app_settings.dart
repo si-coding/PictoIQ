@@ -10,6 +10,7 @@ class AppSettings {
   const AppSettings({
     this.manualSelectionOnly = false,
     this.useFaceSignals = true,
+    this.groupSessions = false,
   });
 
   /// When true, PictoIQ never picks a similar photo to keep: the user marks
@@ -20,15 +21,24 @@ class AppSettings {
   /// makes scans faster and ranks on sharpness, lighting and resolution only.
   final bool useFaceSignals;
 
-  AppSettings copyWith({bool? manualSelectionOnly, bool? useFaceSignals}) =>
-      AppSettings(
-        manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
-        useFaceSignals: useFaceSignals ?? this.useFaceSignals,
-      );
+  /// When true, similar-photo scans also group photos of the same scene taken
+  /// up to ten minutes apart, so a photo session is reviewed as one group.
+  final bool groupSessions;
+
+  AppSettings copyWith({
+    bool? manualSelectionOnly,
+    bool? useFaceSignals,
+    bool? groupSessions,
+  }) => AppSettings(
+    manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
+    useFaceSignals: useFaceSignals ?? this.useFaceSignals,
+    groupSessions: groupSessions ?? this.groupSessions,
+  );
 
   Map<String, Object?> toJson() => {
     'manualSelectionOnly': manualSelectionOnly,
     'useFaceSignals': useFaceSignals,
+    'groupSessions': groupSessions,
   };
 
   /// Unknown or wrongly typed fields fall back to their defaults.
@@ -36,11 +46,13 @@ class AppSettings {
     const defaults = AppSettings();
     final manual = json['manualSelectionOnly'];
     final faces = json['useFaceSignals'];
+    final sessions = json['groupSessions'];
     return AppSettings(
       manualSelectionOnly: manual is bool
           ? manual
           : defaults.manualSelectionOnly,
       useFaceSignals: faces is bool ? faces : defaults.useFaceSignals,
+      groupSessions: sessions is bool ? sessions : defaults.groupSessions,
     );
   }
 
@@ -48,10 +60,11 @@ class AppSettings {
   bool operator ==(Object other) =>
       other is AppSettings &&
       other.manualSelectionOnly == manualSelectionOnly &&
-      other.useFaceSignals == useFaceSignals;
+      other.useFaceSignals == useFaceSignals &&
+      other.groupSessions == groupSessions;
 
   @override
-  int get hashCode => Object.hash(manualSelectionOnly, useFaceSignals);
+  int get hashCode => Object.hash(manualSelectionOnly, useFaceSignals, groupSessions);
 }
 
 /// Keeps [AppSettings] in a small JSON file in the app's private storage.

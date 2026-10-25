@@ -313,6 +313,7 @@ class FolderDuplicateScanner {
     required String folderName,
     bool bestShotsScan = false,
     bool useFaceSignals = true,
+    bool groupSessions = false,
     FolderDateRange dateRange = FolderDateRange.currentFolder,
     void Function(int imagesScanned)? onProgress,
   }) async {
@@ -414,7 +415,12 @@ class FolderDuplicateScanner {
 
     final duplicates = <FolderDuplicateGroup>[];
     if (bestShotsScan) {
-      duplicates.addAll(_groupSimilarShots(images));
+      duplicates.addAll(
+        _groupSimilarShots(
+          images,
+          groupSessions ? SimilarityThresholds.session : thresholds,
+        ),
+      );
       duplicates.sort((a, b) {
         final byName = a.recommended.name.compareTo(b.recommended.name);
         return byName != 0 ? byName : a.id.compareTo(b.id);
@@ -506,7 +512,29 @@ class FolderDuplicateScanner {
       double? eyesOpenMin;
       var smileTotal = 0.0;
       var smileCount = 0;
+      var edgeCutoff = false;
+      double? lookingAwayMax;
+      final size = readImageSize(bytes);
       for (final face in faces) {
+        if (size != null) {
+          // A face this close to the border is probably cut off.
+          final box = face.boundingBox;
+          final marginX = size.$1 * 0.01;
+          final marginY = size.$2 * 0.01;
+          if (box.left < marginX ||
+              box.top < marginY ||
+              box.right > size.$1 - marginX ||
+              box.bottom > size.$2 - marginY) {
+            edgeCutoff = true;
+          }
+        }
+        final yaw = face.headEulerAngleY;
+        if (yaw != null) {
+          final turn = yaw.abs();
+          lookingAwayMax = lookingAwayMax == null
+              ? turn
+              : math.max(lookingAwayMax, turn);
+        }
         final eyes = [
           face.leftEyeOpenProbability,
           face.rightEyeOpenProbability,
@@ -524,6 +552,8 @@ class FolderDuplicateScanner {
         count: faces.length,
         eyesOpenMin: eyesOpenMin,
         smileAverage: smileCount == 0 ? null : smileTotal / smileCount,
+        edgeCutoff: edgeCutoff,
+        lookingAwayMax: lookingAwayMax,
       );
     } catch (error) {
       debugPrint('Face signals unavailable: ${error.runtimeType}');
@@ -554,7 +584,10 @@ class FolderDuplicateScanner {
 
   /// Groups visually similar photos, rates how sure each group is, and ranks
   /// the photos inside it.
-  List<FolderDuplicateGroup> _groupSimilarShots(List<FolderScanPhoto> images) {
+  List<FolderDuplicateGroup> _groupSimilarShots(
+    List<FolderScanPhoto> images,
+    SimilarityThresholds thresholds,
+  ) {
     final clusters = clusterSimilar(
       [
         for (final photo in images)

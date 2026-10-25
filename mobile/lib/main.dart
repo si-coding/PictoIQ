@@ -192,6 +192,7 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
         useFaceSignals: _settings.useFaceSignals,
+        groupSessions: _settings.groupSessions,
         dateRange: _folderDateRange,
         onProgress: (count) {
           if (mounted) setState(() => _folderImagesScanned = count);
@@ -603,6 +604,7 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: scan.folderName,
         bestShotsScan: true,
         useFaceSignals: _settings.useFaceSignals,
+        groupSessions: _settings.groupSessions,
         dateRange: scan.dateRange,
       );
       if (!mounted) return;
@@ -723,6 +725,7 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: scan.folderName,
         bestShotsScan: bestShots,
         useFaceSignals: _settings.useFaceSignals,
+        groupSessions: _settings.groupSessions,
         dateRange: scan.dateRange,
         onProgress: (count) {
           if (mounted) setState(() => _folderImagesScanned = count);
@@ -1832,7 +1835,9 @@ class _LibraryPageState extends State<LibraryPage> {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        '${evidence.confidence.label} match',
+        evidence.isSession
+            ? 'Same session'
+            : '${evidence.confidence.label} match',
         style: TextStyle(
           fontSize: 10,
           fontWeight: FontWeight.w700,
@@ -1949,7 +1954,12 @@ class _LibraryPageState extends State<LibraryPage> {
                             ),
                           ),
                           Text(
-                            '${_stateLabel(photo.uri, keepIds, removeIds, decision)} · ${_shotSummary(group, photo)}',
+                            [
+                              if (_pickLabel(group, photo) != null)
+                                _pickLabel(group, photo)!,
+                              _stateLabel(photo.uri, keepIds, removeIds, decision),
+                              _shotSummary(group, photo),
+                            ].join(' · '),
                             style: const TextStyle(
                               fontSize: 10,
                               color: Color(0xFF85877F),
@@ -2036,6 +2046,11 @@ class _LibraryPageState extends State<LibraryPage> {
         : ranking.shots
               .map((shot) => shot.features.signals.sharpness)
               .reduce((a, b) => a > b ? a : b);
+    var finalistsOnly = false;
+    final canFilter =
+        ranking != null &&
+        ranking.finalists.isNotEmpty &&
+        ranking.finalists.length < group.photos.length;
     return showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
@@ -2061,6 +2076,18 @@ class _LibraryPageState extends State<LibraryPage> {
                       : '${ranking.headline}. Scores compare these photos with each other only; they are not a rating of the photo itself.',
                   style: const TextStyle(fontSize: 11, color: Color(0xFF77796F)),
                 ),
+                if (canFilter)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilterChip(
+                      label: Text(
+                        'Finalists only (${ranking!.finalists.length})',
+                      ),
+                      selected: finalistsOnly,
+                      onSelected: (value) =>
+                          setDialogState(() => finalistsOnly = value),
+                    ),
+                  ),
                 const SizedBox(height: 10),
                 Flexible(
                   child: SingleChildScrollView(
@@ -2069,7 +2096,12 @@ class _LibraryPageState extends State<LibraryPage> {
                       child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        for (final photo in group.bestFirst)
+                        for (final photo in group.bestFirst.where(
+                          (candidate) =>
+                              !finalistsOnly ||
+                              (ranking?.shotFor(candidate.uri)?.isFinalist ??
+                                  true),
+                        ))
                           _compareColumn(
                             group,
                             photo,
@@ -2158,7 +2190,7 @@ class _LibraryPageState extends State<LibraryPage> {
           Text(
             shot == null
                 ? photo.relativePath
-                : '#${shot.rank} · ${shot.score}/100',
+                : '${_pickLabel(group, photo) == null ? '' : '${_pickLabel(group, photo)} · '}#${shot.rank} · ${shot.score}/100',
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
           Text(
@@ -2175,6 +2207,12 @@ class _LibraryPageState extends State<LibraryPage> {
                 Icons.error_outline,
                 const Color(0xFFB37957),
                 reason,
+              ),
+            if (shot.isDisqualified)
+              line(
+                Icons.block,
+                const Color(0xFF9A3F2F),
+                'Ruled out as a top pick: ${shot.disqualifiers.join(', ')}',
               ),
           ],
           const Divider(height: 14),
@@ -2224,6 +2262,18 @@ class _LibraryPageState extends State<LibraryPage> {
         ],
       ),
     );
+  }
+
+  /// "Top pick" for the best clean photo, "Finalist" for the other photos
+  /// worth choosing between, "Has a fault" for ruled-out photos.
+  String? _pickLabel(FolderDuplicateGroup group, FolderScanPhoto photo) {
+    final ranking = group.ranking;
+    final shot = ranking?.shotFor(photo.uri);
+    if (ranking == null || shot == null) return null;
+    if (shot.isFinalist) {
+      return ranking.finalists.first.id == shot.id ? 'Top pick' : 'Finalist';
+    }
+    return shot.isDisqualified ? 'Has a fault' : null;
   }
 
   String _stateLabel(
@@ -2454,6 +2504,19 @@ class _LibraryPageState extends State<LibraryPage> {
                   value: _settings.useFaceSignals,
                   onChanged: (value) {
                     _updateSettings(_settings.copyWith(useFaceSignals: value));
+                    setDialogState(() {});
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Group photos from the same session'),
+                  subtitle: const Text(
+                    'Also groups photos of the same people and place taken up to 10 minutes apart, even when poses differ, so you can pick the one worth framing. These groups are never cleaned up in bulk. Applies to the next scan.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  value: _settings.groupSessions,
+                  onChanged: (value) {
+                    _updateSettings(_settings.copyWith(groupSessions: value));
                     setDialogState(() {});
                   },
                 ),

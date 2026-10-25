@@ -110,6 +110,8 @@ class FaceSignals {
     required this.count,
     required this.eyesOpenMin,
     required this.smileAverage,
+    this.edgeCutoff = false,
+    this.lookingAwayMax,
   });
 
   static const none = FaceSignals(
@@ -126,6 +128,14 @@ class FaceSignals {
 
   /// Average smile probability (0-1) over the faces that report one.
   final double? smileAverage;
+
+  /// True when a face touches or runs past the edge of the picture, which
+  /// usually means someone's head is cut off.
+  final bool edgeCutoff;
+
+  /// Largest head turn away from the camera, in degrees, over all faces
+  /// (0 = facing the camera). Null when unknown.
+  final double? lookingAwayMax;
 }
 
 /// Everything the ranking needs to know about one photo.
@@ -173,6 +183,8 @@ class RankedShot {
     required this.strengths,
     required this.concerns,
     required this.features,
+    this.disqualifiers = const [],
+    this.isFinalist = false,
   });
 
   final String id;
@@ -192,8 +204,20 @@ class RankedShot {
 
   final ShotFeatures features;
 
+  /// Faults serious enough that this photo should not be the one to keep or
+  /// frame while a photo without them exists (closed eyes, a face cut off,
+  /// looking away, badly blurred or washed out).
+  final List<String> disqualifiers;
+
+  bool get isDisqualified => disqualifiers.isNotEmpty;
+
+  /// One of the few photos worth choosing between (at most three, none with a
+  /// disqualifier, all close to the best score). The first is the top pick.
+  final bool isFinalist;
+
   /// One line for a list row.
   String get summary {
+    if (isDisqualified) return 'Not recommended: ${disqualifiers.first}';
     if (strengths.isEmpty && concerns.isEmpty) return 'Similar to the others';
     return [...strengths.take(2), ...concerns.take(1)].join(' · ');
   }
@@ -220,22 +244,59 @@ class GroupRanking {
   /// Points between the best and second-best shot.
   int get margin => shots.length < 2 ? 100 : shots[0].score - shots[1].score;
 
+  /// The photos worth choosing between, best first. Empty when every photo
+  /// has a disqualifying fault.
+  List<RankedShot> get finalists => [
+    for (final shot in shots)
+      if (shot.isFinalist) shot,
+  ];
+
   /// False when the top two shots are too close to call, in which case the
-  /// app should not choose between them without the user's help.
-  bool get isClearWinner => margin >= clearWinnerMargin;
+  /// app should not choose between them without the user's help. A top shot
+  /// with a fault is never a clear winner; a clean top shot beating a faulty
+  /// runner-up always is.
+  bool get isClearWinner {
+    if (shots.length < 2) return true;
+    if (best.isDisqualified) return false;
+    if (shots[1].isDisqualified) return true;
+    return margin >= clearWinnerMargin;
+  }
 
   /// Minimum score gap for [isClearWinner].
   static const clearWinnerMargin = 6;
 
   /// Short explanation of the recommendation.
   String get headline {
-    if (!isClearWinner) return 'These shots are very close; you decide';
+    if (shots.isNotEmpty && best.isDisqualified) {
+      return 'Every shot has a fault; look closely before choosing';
+    }
+    if (!isClearWinner) {
+      final count = finalists.length;
+      return count > 1
+          ? '$count strong candidates; you decide'
+          : 'These shots are very close; you decide';
+    }
     final reasons = best.strengths.take(2).toList();
     return reasons.isEmpty
         ? 'Best overall balance'
         : 'Recommended: ${reasons.join(', ').toLowerCase()}';
   }
 }
+
+// A shot with a disqualifying fault loses this many points per fault (at most
+// two count) and is never chosen over a shot without one.
+const _faultPenalty = 20;
+
+// Faults that rule a photo out as the one to keep.
+const _closedEyes = 0.4;
+const _lookingAwayDegrees = 30.0;
+const _blurRatio = 0.35;
+const _washedOutShare = 0.15;
+const _crushedShare = 0.5;
+
+// Finalists: up to this many photos within this many points of the best clean one.
+const _maxFinalists = 3;
+const _finalistWindow = 15;
 
 // Score weights. They add up to 100 when faces are used, 70 when not.
 const _sharpnessWeight = 40.0;
@@ -382,20 +443,41 @@ GroupRanking rankShots(List<ShotInput> inputs) {
       }
     }
 
+    final faults = <String>[];
+    if (inputs.length > 1 && maxSharpness > 0 && sharpRatio < _blurRatio) {
+      faults.add('too blurry compared with the others');
+    }
+    if (signals.highlightClip > _washedOutShare) faults.add('washed out');
+    if (signals.shadowClip > _crushedShare) faults.add('too dark');
+    final faceInfo = features.faces;
+    if (faceInfo != null && faceInfo.count > 0) {
+      final eyes = faceInfo.eyesOpenMin;
+      if (eyes != null && eyes < _closedEyes) faults.add('eyes closed');
+      if (faceInfo.edgeCutoff) faults.add('a face is cut off at the edge');
+      final away = faceInfo.lookingAwayMax;
+      if (away != null && away > _lookingAwayDegrees) {
+        faults.add('someone is looking away');
+      }
+    }
+    final rawScore = (100 * entry.points / possible).round();
+    final penalty = _faultPenalty * math.min(faults.length, 2);
+
     shots.add(
       RankedShot(
         id: entry.input.id,
         rank: 0,
-        score: (100 * entry.points / possible).round().clamp(0, 100).toInt(),
+        score: (rawScore - penalty).clamp(0, 100).toInt(),
         strengths: List.unmodifiable(strengths),
         concerns: List.unmodifiable(concerns),
         features: features,
+        disqualifiers: List.unmodifiable(faults),
       ),
     );
   }
 
   final tieBreakers = {for (final input in inputs) input.id: input.tieBreaker};
   shots.sort((a, b) {
+    if (a.isDisqualified != b.isDisqualified) return a.isDisqualified ? 1 : -1;
     final byScore = b.score.compareTo(a.score);
     if (byScore != 0) return byScore;
     final bySharpness = b.features.signals.sharpness.compareTo(
@@ -404,6 +486,18 @@ GroupRanking rankShots(List<ShotInput> inputs) {
     if (bySharpness != 0) return bySharpness;
     return tieBreakers[a.id]!.compareTo(tieBreakers[b.id]!);
   });
+
+  final cleanBest = shots.isNotEmpty && !shots.first.isDisqualified
+      ? shots.first.score
+      : null;
+  var finalists = 0;
+  bool isFinalist(RankedShot shot) {
+    if (cleanBest == null || shot.isDisqualified) return false;
+    if (finalists >= _maxFinalists) return false;
+    if (shot.score < cleanBest - _finalistWindow) return false;
+    finalists++;
+    return true;
+  }
 
   return GroupRanking(
     shots: List.unmodifiable([
@@ -415,6 +509,8 @@ GroupRanking rankShots(List<ShotInput> inputs) {
           strengths: shots[i].strengths,
           concerns: shots[i].concerns,
           features: shots[i].features,
+          disqualifiers: shots[i].disqualifiers,
+          isFinalist: isFinalist(shots[i]),
         ),
     ]),
     usedFaceSignals: useFaces,
