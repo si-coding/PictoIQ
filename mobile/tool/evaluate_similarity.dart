@@ -88,4 +88,30 @@ Future<void> main(List<String> args) async {
       );
     }
   }
+
+  // Same-session mode: label photos of one photo session with a shared scene
+  // label to measure it. Expect lower precision than burst mode.
+  stdout.writeln('');
+  for (final distance in [14, 18, 22]) {
+    final thresholds = SimilarityThresholds(
+      maxLinkDistance: distance,
+      windowMs: SimilarityThresholds.session.windowMs,
+      highDistance: SimilarityThresholds.session.highDistance,
+      highSpanMs: SimilarityThresholds.session.highSpanMs,
+      mediumDistance: SimilarityThresholds.session.mediumDistance,
+      isSession: true,
+    );
+    final clusters = clusterSimilar(candidates, thresholds: thresholds);
+    final metrics = evaluateGrouping(
+      truth: usable,
+      predicted: [
+        for (final c in clusters) [for (final i in c.members) names[i]],
+      ],
+    );
+    stdout.writeln(
+      'session link $distance, 10 min: ${clusters.length} groups, '
+      'precision ${metrics.precision.toStringAsFixed(3)}, '
+      'recall ${metrics.recall.toStringAsFixed(3)}',
+    );
+  }
 }
