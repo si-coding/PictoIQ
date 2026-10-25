@@ -38,6 +38,8 @@ For device profiling, run `flutter run --profile` on a physical Android device a
 - When every photo in a group was analysed and a face exists, eye-open and smile signals from ML Kit face detection add up to 30% of the score. They can be switched off in Settings (faster scans, nothing else changes).
 - Compare opens every photo in a group side by side with its score, strengths, concerns and measurements. "Keep this one" records your pick; "Reset my choices" returns the group to PictoIQ's suggestion.
 - "I choose which photos to keep" in Settings stops PictoIQ from selecting anything in similar-photo groups until you give a thumbs-up.
+- A photo is ruled out as a top pick when someone's eyes look closed, a face is cut off at the edge, someone is looking well away from the camera, or it is badly blurred or washed out. Ruled-out photos lose points and are never chosen over a clean photo. Up to three close, clean photos are shown as the Top pick and Finalists, and Compare can show finalists only.
+- "Group photos from the same session" in Settings also groups the same scene taken up to 10 minutes apart with different poses. These groups are labelled "Same session", are never rated High, and are never part of a bulk clean-up. The distance limits are untuned; check them with `tool/evaluate_similarity.dart`.
 - Face signals have not been benchmarked against alternative models. To do that, collect 50+ burst sets with blinks, compare the ranking with and without face signals (Settings switch) against your own pick, and time scans on a mid-range device.
 
 ## Getting Started
