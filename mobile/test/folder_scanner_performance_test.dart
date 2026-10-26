@@ -45,11 +45,11 @@ void main() {
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   late Directory temporary;
-  final facePaths = <String>[];
+  final faceInputs = <(int, int)>[];
 
   setUp(() async {
     temporary = await Directory.systemTemp.createTemp('pictoiq-test-');
-    facePaths.clear();
+    faceInputs.clear();
     messenger.setMockMethodCallHandler(pathChannel, (call) async {
       if (call.method == 'getTemporaryDirectory') return temporary.path;
       throw UnsupportedError(call.method);
@@ -58,11 +58,15 @@ void main() {
       if (call.method == 'vision#closeFaceDetector') return null;
       final arguments = call.arguments as Map;
       final imageData = arguments['imageData'] as Map;
-      final path = imageData['path'] as String;
-      facePaths.add(path);
-      final image = img.decodeJpg(await File(path).readAsBytes())!;
-      expect(image.width, lessThanOrEqualTo(1024));
-      expect(image.height, lessThanOrEqualTo(1024));
+      expect(imageData['type'], 'bitmap');
+      final bitmap = imageData['bitmapData'] as Uint8List;
+      final metadata = imageData['metadata'] as Map;
+      final width = (metadata['width'] as num).toInt();
+      final height = (metadata['height'] as num).toInt();
+      expect(bitmap.length, width * height * 4);
+      expect(width, lessThanOrEqualTo(1024));
+      expect(height, lessThanOrEqualTo(1024));
+      faceInputs.add((width, height));
       return <Object>[];
     });
   });
@@ -100,8 +104,7 @@ void main() {
           group.photos.every((photo) => photo.previewBytes != null),
           isTrue,
         );
-        expect(facePaths, hasLength(2));
-        expect(facePaths.every((path) => !File(path).existsSync()), isTrue);
+        expect(faceInputs, hasLength(2));
         expect(ticks, greaterThan(0));
         // Diagnostic only: wall-clock performance depends on the test machine.
         // ignore: avoid_print
@@ -127,7 +130,7 @@ void main() {
       expect(group.id, sha256.convert(bytes).toString());
       expect(group.photos.every((photo) => photo.sha256 == group.id), isTrue);
       expect(result.reclaimableBytes, bytes.length);
-      expect(facePaths, isEmpty);
+      expect(faceInputs, isEmpty);
     } finally {
       await scanner.dispose();
     }
@@ -146,7 +149,43 @@ void main() {
       expect(result.imagesScanned, 0);
       expect(result.imagesSkipped, 2);
       expect(result.duplicateGroups, isEmpty);
-      expect(facePaths, isEmpty);
+      expect(faceInputs, isEmpty);
+    } finally {
+      await scanner.dispose();
+    }
+  });
+
+  test('a scan stops with ScanCancelled when asked to', () async {
+    final scanner = FolderDuplicateScanner(
+      saf: _MemorySaf(img.encodePng(img.Image(width: 30, height: 20))),
+    );
+    try {
+      await expectLater(
+        scanner.scanUri(
+          'content://test',
+          folderName: 'test',
+          shouldCancel: () => true,
+        ),
+        throwsA(isA<ScanCancelled>()),
+      );
+    } finally {
+      await scanner.dispose();
+    }
+  });
+
+  test('reports photos left out by the date range', () async {
+    final scanner = FolderDuplicateScanner(
+      saf: _MemorySaf(img.encodePng(img.Image(width: 30, height: 20))),
+    );
+    try {
+      final result = await scanner.scanUri(
+        'content://test',
+        folderName: 'test',
+        dateRange: FolderDateRange.today,
+      );
+      expect(result.imagesScanned, 0);
+      expect(result.imageFilesFound, 2);
+      expect(result.imagesOutsideDateRange, 2);
     } finally {
       await scanner.dispose();
     }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:image/image.dart' as img;
 
 /// Where a capture time came from. Times from different sources are never
@@ -7,6 +9,10 @@ abstract final class CaptureSource {
   static const unknown = 0;
   static const exif = 1;
   static const modified = 2;
+
+  /// Only the day is known (from a file name such as `IMG-20221109-WA0007`).
+  /// Same-day photos are not treated as shot at the same moment.
+  static const day = 3;
 }
 
 /// Number of differing bits between two 64-bit hashes.
@@ -46,9 +52,77 @@ int differenceHash(img.Image image) {
   return hash;
 }
 
+/// Number of colour bins in a [colorHistogram] (4 levels per channel).
+const colorHistogramBins = 64;
+
+/// Coarse colour profile of [image]: the share of pixels in each of 64 colour
+/// bins. It ignores where things are in the picture, so it survives small
+/// camera movements, zoom and people shifting position, which the structure
+/// hash [differenceHash] does not.
+List<double> colorHistogram(img.Image image) {
+  final small = img.copyResize(
+    image,
+    width: 64,
+    height: 64,
+    interpolation: img.Interpolation.average,
+  );
+  final counts = List<double>.filled(colorHistogramBins, 0);
+  for (var y = 0; y < small.height; y++) {
+    for (var x = 0; x < small.width; x++) {
+      final pixel = small.getPixel(x, y);
+      final r = math.min(255, math.max(0, pixel.r.toInt())) >> 6;
+      final g = math.min(255, math.max(0, pixel.g.toInt())) >> 6;
+      final b = math.min(255, math.max(0, pixel.b.toInt())) >> 6;
+      counts[(r << 4) | (g << 2) | b] += 1;
+    }
+  }
+  final total = small.width * small.height;
+  return [for (final count in counts) count / total];
+}
+
+/// How different two colour profiles are: 0 for the same, towards 1 for
+/// nothing in common (one minus the Bhattacharyya coefficient).
+double histogramDistance(List<double> a, List<double> b) {
+  var overlap = 0.0;
+  final length = a.length < b.length ? a.length : b.length;
+  for (var i = 0; i < length; i++) {
+    overlap += math.sqrt(a[i] * b[i]);
+  }
+  return (1 - overlap).clamp(0.0, 1.0).toDouble();
+}
+
+/// The date (and time, when present) written in a file name such as
+/// `IMG-20221109-WA0007.jpg`, `IMG_20221109_123456.jpg` or
+/// `PXL_20221109_123456789.jpg`. Returns the date, the time of day in
+/// seconds, or null seconds when only the date is given; null when the name
+/// has no plausible date.
+(DateTime, int?)? fileNameDate(String name) {
+  final match = RegExp(
+    r'(?<!\d)((?:19|20)\d{2})(\d{2})(\d{2})(?:[_-]?(\d{2})(\d{2})(\d{2}))?',
+  ).firstMatch(name);
+  if (match == null) return null;
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  if (year < 1990 || year > 2100 || month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  final date = DateTime(year, month, day);
+  if (date.month != month) return null;
+  final hour = match.group(4);
+  if (hour == null) return (date, null);
+  final h = int.parse(hour);
+  final m = int.parse(match.group(5)!);
+  final sec = int.parse(match.group(6)!);
+  if (h > 23 || m > 59 || sec > 59) return (date, null);
+  return (date, h * 3600 + m * 60 + sec);
+}
+
 /// When the photo was taken, as (milliseconds, [CaptureSource]): EXIF capture
-/// time when present, otherwise the file's modified time, otherwise unknown.
-(int, int) captureTimeOf(img.Image image, int modifiedAt) {
+/// time when present; otherwise the file's modified time, unless the file
+/// name shows a different day (a bulk copy or download resets modified times,
+/// and trusting it would make photos from different years look simultaneous);
+/// otherwise the date in the file name; otherwise unknown.
+(int, int) captureTimeOf(img.Image image, int modifiedAt, {String? fileName}) {
   try {
     if (image.hasExif) {
       final raw = image.exif.exifIfd[0x9003]?.toString().trim();
@@ -77,6 +151,27 @@ int differenceHash(img.Image image) {
   } catch (_) {
     // Fall back to the file's modified time below.
   }
+  final named = fileName == null ? null : fileNameDate(fileName);
+  if (named != null) {
+    final (date, seconds) = named;
+    final modifiedAgrees =
+        modifiedAt > 0 &&
+        (DateTime.fromMillisecondsSinceEpoch(modifiedAt)
+                    .difference(date)
+                    .inHours
+                    .abs() <=
+                48);
+    if (!modifiedAgrees) {
+      if (seconds != null) {
+        // Wall-clock time like EXIF, so it shares that source.
+        return (
+          date.millisecondsSinceEpoch + seconds * 1000,
+          CaptureSource.exif,
+        );
+      }
+      return (date.millisecondsSinceEpoch, CaptureSource.day);
+    }
+  }
   if (modifiedAt > 0) return (modifiedAt, CaptureSource.modified);
   return (0, CaptureSource.unknown);
 }
@@ -94,6 +189,9 @@ class SimilarityThresholds {
     this.mediumDistance = 8,
     this.maxClusterForDiameter = 300,
     this.isSession = false,
+    this.burstGapMs = 8 * 1000,
+    this.burstHashDistance = 14,
+    this.burstColorDistance = 0.25,
   });
 
   /// Looser grouping for "same session" photos: the same people and place
@@ -111,6 +209,17 @@ class SimilarityThresholds {
 
   /// True for the looser session settings, so the UI can say so.
   final bool isSession;
+
+  /// Photos taken within this many milliseconds of each other are almost
+  /// certainly the same moment (a burst, or a few quick shots), so they are
+  /// linked on a looser test: a hash difference up to [burstHashDistance], or
+  /// a colour difference up to [burstColorDistance]. Small camera movement
+  /// changes the structure hash a lot but barely changes the colours.
+  final int burstGapMs;
+  final int burstHashDistance;
+
+  /// Colour difference (see [histogramDistance]) allowed within the burst gap.
+  final double burstColorDistance;
 
   /// Two photos may be linked when their hashes differ by at most this many
   /// bits (out of 64).
@@ -155,9 +264,18 @@ class SimilarityEvidence {
     required this.captureSource,
     required this.size,
     this.isSession = false,
+    this.maxColorDistance,
   });
 
+  /// Colour differences up to this count as "the same scene" in the UI and
+  /// keep a quick burst at medium confidence even when the hash differs.
+  static const sameSceneColor = 0.1;
+
   final SimilarityConfidence confidence;
+
+  /// Largest colour difference between any two photos in the group (0-1), or
+  /// null when colour profiles were not available.
+  final double? maxColorDistance;
 
   /// True when the group came from the looser same-session settings.
   final bool isSession;
@@ -174,11 +292,15 @@ class SimilarityEvidence {
 
   /// Plain-language facts behind the confidence level, for the UI.
   List<String> get notes {
+    final sameColors =
+        maxColorDistance != null && maxColorDistance! <= sameSceneColor;
     final content = maxDistance <= 4
         ? 'Nearly identical content'
         : (maxDistance <= 8
               ? 'Very similar content'
-              : 'Loosely similar content');
+              : (sameColors
+                    ? 'Same scene, framing differs'
+                    : 'Loosely similar content'));
     final result = <String>[
       if (isSession) 'Same session: poses and framing may differ',
       '$content (up to $maxDistance of 64 differences)',
@@ -208,7 +330,11 @@ class SimilarityCandidate {
     required this.capturedAt,
     required this.captureSource,
     required this.tieBreaker,
+    this.colorHistogram,
   });
+
+  /// Colour profile from [colorHistogram], when available.
+  final List<double>? colorHistogram;
 
   final int visualHash;
   final int capturedAt;
@@ -266,18 +392,34 @@ List<SimilarityCluster> clusterSimilar(
 
   for (var i = 1; i < order.length; i++) {
     final current = candidates[order[i]];
-    final timed = current.captureSource != CaptureSource.unknown;
+    final timed =
+        current.captureSource != CaptureSource.unknown &&
+        current.captureSource != CaptureSource.day;
     for (var j = i - 1; j >= 0; j--) {
       final earlier = candidates[order[j]];
       if (earlier.captureSource != current.captureSource) break;
       final gap = current.capturedAt - earlier.capturedAt;
       if (timed && gap > thresholds.windowMs) break;
+      // Day-only photos must at least share the same day.
+      if (current.captureSource == CaptureSource.day && gap > 0) break;
       // Without a capture time there is nothing to keep loose matches local,
       // so session grouping falls back to the strict distance.
       final limit = timed || !thresholds.isSession
           ? thresholds.maxLinkDistance
           : const SimilarityThresholds().maxLinkDistance;
-      if (hammingDistance(earlier.visualHash, current.visualHash) <= limit) {
+      final distance = hammingDistance(earlier.visualHash, current.visualHash);
+      var linked = distance <= limit;
+      if (!linked && timed && gap <= thresholds.burstGapMs) {
+        // Same moment: tolerate small shifts in framing.
+        final a = earlier.colorHistogram;
+        final b = current.colorHistogram;
+        linked =
+            distance <= thresholds.burstHashDistance ||
+            (a != null &&
+                b != null &&
+                histogramDistance(a, b) <= thresholds.burstColorDistance);
+      }
+      if (linked) {
         final rootCurrent = find(i);
         final rootEarlier = find(j);
         if (rootCurrent != rootEarlier) parent[rootCurrent] = rootEarlier;
@@ -307,6 +449,7 @@ SimilarityEvidence _evidenceFor(
   SimilarityThresholds thresholds,
 ) {
   var maxDistance = 0;
+  double? maxColor;
   if (members.length > thresholds.maxClusterForDiameter) {
     maxDistance = 64;
   } else {
@@ -317,6 +460,12 @@ SimilarityEvidence _evidenceFor(
           members[j].visualHash,
         );
         if (distance > maxDistance) maxDistance = distance;
+        final a = members[i].colorHistogram;
+        final b = members[j].colorHistogram;
+        if (a != null && b != null) {
+          final color = histogramDistance(a, b);
+          if (maxColor == null || color > maxColor) maxColor = color;
+        }
       }
     }
   }
@@ -335,8 +484,15 @@ SimilarityEvidence _evidenceFor(
 
   final span = spanMs;
   final SimilarityConfidence confidence;
+  // A quick burst whose colours match is the same scene even if the camera
+  // moved enough to change the structure hash.
+  final quickSameScene =
+      span != null &&
+      span <= thresholds.highSpanMs &&
+      maxColor != null &&
+      maxColor <= SimilarityEvidence.sameSceneColor;
   if (span == null ||
-      maxDistance > thresholds.mediumDistance ||
+      (maxDistance > thresholds.mediumDistance && !quickSameScene) ||
       span > thresholds.windowMs) {
     confidence = SimilarityConfidence.low;
   } else if (maxDistance <= thresholds.highDistance &&
@@ -354,6 +510,7 @@ SimilarityEvidence _evidenceFor(
     captureSource: source,
     size: members.length,
     isSession: thresholds.isSession,
+    maxColorDistance: maxColor,
   );
 }
 

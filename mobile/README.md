@@ -8,7 +8,7 @@ Local-first Android photo review and best-shot recommendations.
 - Best-shot analysis does not compute SHA-256. Similar groups use a member URI as their local group ID; exact groups retain the content hash.
 - Decode, orientation normalization, resizing, visual hashing, technical scoring, and JPEG encoding run in `Isolate.run`, one image at a time. Native face detection remains on the plugin's platform channel.
 - JPEG decoding uses subsampling when appropriate. Analysis and ML Kit input images are capped at 1024 pixels on the longest edge, preserving aspect ratio and never upscaling small images.
-- Previews have a maximum edge of 360 pixels for best shots and 480 for exact duplicates. Temporary face images are JPEG files and are deleted after processing.
+- Previews have a maximum edge of 360 pixels for best shots and 480 for exact duplicates. Face detection receives raw pixels (at most 1024 px on the longest edge) directly, with no temporary file.
 - Visual analysis rejects encoded files over 64 MiB, JPEG sources over 67,108,864 pixels, and other formats over 25,165,824 pixels before decoding pixel data. Other formats still require full-frame decoding inside the worker before resizing. These safeguards do not guarantee a particular peak-memory footprint.
 - Failed or unsupported best-shot files increment the existing skipped count and cannot become deletion candidates. Exact duplicates can still be detected by streaming SHA-256 if their previews exceed these limits.
 
@@ -28,6 +28,8 @@ For device profiling, run `flutter run --profile` on a physical Android device a
 ## Similar-photo grouping
 
 - Similar photos are grouped by a 64-bit difference hash plus capture time (EXIF time when present, file time otherwise; the two are never compared). They are kept separate from exact duplicates and are never described as guaranteed duplicates.
+- Photos taken within 8 seconds of each other are also linked when their colours match (or their hashes differ by up to 14 bits), because small camera movement changes the structure hash a lot while barely changing colours. Such groups are Medium at best, and Low when the colours differ noticeably. If a photo does not belong (for example a different person in the same spot), open Compare and tap "Not the same scene"; nothing is deleted.
+- Capture time comes from EXIF, else the file's modified time. If the file name carries a date (`IMG-20221109-WA0007`, `IMG_20221109_123456`, `PXL_...`) and the modified time is more than two days away from it (bulk copy or download), the name wins. Date-only names (WhatsApp) mean photos from different days never group, and same-day ones need the strict hash match.
 - Each group shows a High, Medium or Low match label with the facts behind it (hash spread, time span, time source). A chain of look-alikes whose ends differ a lot is marked Low.
 - Default selection is conservative: every thumbs-up photo is kept; otherwise the top-ranked photo is suggested. Bulk deletion only touches groups that are High match with a clear top photo, or groups where you chose.
 - Thresholds are starting points. Measure them on your own photos with `dart run tool/evaluate_similarity.dart <folder> <labels.csv>`; `test/similarity_evaluation_test.dart` is a synthetic regression set, not a measurement.
@@ -41,6 +43,13 @@ For device profiling, run `flutter run --profile` on a physical Android device a
 - A photo is ruled out as a top pick when someone's eyes look closed, a face is cut off at the edge, someone is looking well away from the camera, or it is badly blurred or washed out. Ruled-out photos lose points and are never chosen over a clean photo. Up to three close, clean photos are shown as the Top pick and Finalists, and Compare can show finalists only.
 - "Group photos from the same session" in Settings also groups the same scene taken up to 10 minutes apart with different poses. These groups are labelled "Same session", are never rated High, and are never part of a bulk clean-up. The distance limits are untuned; check them with `tool/evaluate_similarity.dart`.
 - Face signals have not been benchmarked against alternative models. To do that, collect 50+ burst sets with blinks, compare the ranking with and without face signals (Settings switch) against your own pick, and time scans on a mid-range device.
+
+## Home screen
+
+- Two tabs: **Scan** (folder, scan buttons, results) and **Library** (photos you imported into PictoIQ and the duplicates among them). Library counters say "saved photos" so they are not confused with folder-scan results.
+- "Find the best shots" is the primary action. After a scan the folder form collapses to one line ("New scan") so results sit near the top. If both scan types have results, a switch shows one at a time.
+- Similar-photo results can be filtered: All, Ready to clean, Needs review.
+- A running scan can be cancelled; cancelling changes nothing. Deleting photos updates the results on screen without scanning the folder again.
 
 ## Getting Started
 

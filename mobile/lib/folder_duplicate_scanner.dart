@@ -1,14 +1,13 @@
-import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:saf/saf.dart';
 
 import 'scan_image_processing.dart';
@@ -22,7 +21,10 @@ class _ShotAnalysis {
     required this.signals,
     required this.megapixels,
     required this.preview,
-    required this.faceImage,
+    required this.faceBitmap,
+    required this.faceWidth,
+    required this.faceHeight,
+    required this.colorHistogram,
   });
 
   final int visualHash;
@@ -31,8 +33,14 @@ class _ShotAnalysis {
   final double megapixels;
   final Uint8List preview;
 
-  /// JPEG handed to face detection; null when face signals are turned off.
-  final Uint8List? faceImage;
+  /// Raw RGBA pixels (width x height x 4 bytes) handed to face detection;
+  /// null when face signals are turned off or the pixels could not be built.
+  final Uint8List? faceBitmap;
+  final int faceWidth;
+  final int faceHeight;
+
+  /// Colour profile used to link quick shots whose framing differs.
+  final List<double> colorHistogram;
 }
 
 class FolderScanPhoto {
@@ -50,6 +58,7 @@ class FolderScanPhoto {
     this.capturedAt = 0,
     this.captureSource = captureSourceUnknown,
     this.features,
+    this.colorHistogram,
   });
 
   /// Where [capturedAt] came from. Times from different sources are never
@@ -78,6 +87,9 @@ class FolderScanPhoto {
   /// scans, which do not analyse pixels.
   final ShotFeatures? features;
 
+  /// Colour profile for grouping quick shots; null for exact-duplicate scans.
+  final List<double>? colorHistogram;
+
   FolderScanPhoto withPreviewBytes(Uint8List? bytes) => FolderScanPhoto(
     uri: uri,
     name: name,
@@ -92,6 +104,7 @@ class FolderScanPhoto {
     capturedAt: capturedAt,
     captureSource: captureSource,
     features: features,
+    colorHistogram: colorHistogram,
   );
 
   /// Copy carrying the group-relative score and reasons from [rankShots].
@@ -112,6 +125,7 @@ class FolderScanPhoto {
     capturedAt: capturedAt,
     captureSource: captureSource,
     features: features,
+    colorHistogram: colorHistogram,
   );
 
   DateTime? get modifiedDate =>
@@ -170,6 +184,20 @@ class FolderDuplicateGroup {
     return sorted;
   }
 
+  /// This group without the photos in [removed], re-ranked from what is left.
+  /// Null when fewer than two photos remain, so it is no longer a group.
+  FolderDuplicateGroup? without(Set<String> removed) {
+    final left = [
+      for (final photo in photos)
+        if (!removed.contains(photo.uri)) photo,
+    ];
+    if (left.length < 2) return null;
+    if (left.length == photos.length) return this;
+    final evidence = this.evidence;
+    if (evidence == null) return FolderDuplicateGroup(id: id, photos: left);
+    return rankedGroup(left, evidence, id: id);
+  }
+
   FolderScanPhoto get original => oldestFirst.first;
   List<FolderScanPhoto> get newerCopies => oldestFirst.skip(1).toList();
   List<FolderScanPhoto> get bestFirst {
@@ -205,6 +233,10 @@ class FolderScanResult {
     required this.bestShotsScan,
     required this.dateRange,
     this.imagesSkipped = 0,
+    this.imageFilesFound = 0,
+    this.imagesOutsideDateRange = 0,
+    this.scannedPhotos = const [],
+    this.skippedNames = const [],
   });
 
   final String folderUri;
@@ -218,6 +250,77 @@ class FolderScanResult {
   /// were left out of the scan, so they can never be offered for deletion.
   final int imagesSkipped;
 
+  /// Image files seen in the folder before the date filter was applied.
+  final int imageFilesFound;
+
+  /// Image files left out because they are older than the chosen date range.
+  final int imagesOutsideDateRange;
+
+  /// Every photo that was read and analysed, grouped or not, so the user can
+  /// check what the scan actually looked at.
+  final List<FolderScanPhoto> scannedPhotos;
+
+  /// Paths of files that could not be read or decoded.
+  final List<String> skippedNames;
+
+  /// This result after the photos in [removed] were deleted: groups shrink
+  /// or disappear and similar-photo groups are re-ranked, without scanning the
+  /// folder again.
+  FolderScanResult withoutPhotos(Set<String> removed) {
+    if (removed.isEmpty) return this;
+    final groups = <FolderDuplicateGroup>[];
+    var removedCount = 0;
+    for (final group in duplicateGroups) {
+      removedCount += group.photos.where((p) => removed.contains(p.uri)).length;
+      final updated = group.without(removed);
+      if (updated != null) groups.add(updated);
+    }
+    return FolderScanResult(
+      folderUri: folderUri,
+      folderName: folderName,
+      imagesScanned: math.max(0, imagesScanned - removedCount),
+      duplicateGroups: List.unmodifiable(groups),
+      bestShotsScan: bestShotsScan,
+      dateRange: dateRange,
+      imagesSkipped: imagesSkipped,
+      imageFilesFound: imageFilesFound,
+      imagesOutsideDateRange: imagesOutsideDateRange,
+      scannedPhotos: List.unmodifiable([
+        for (final photo in scannedPhotos)
+          if (!removed.contains(photo.uri)) photo,
+      ]),
+      skippedNames: skippedNames,
+    );
+  }
+
+  /// This result with [uri] taken out of the group [groupId] (the person said
+  /// it is not the same scene). Nothing is deleted; the photo just stops being
+  /// offered for removal with that group, and the group is re-ranked.
+  FolderScanResult withoutFromGroup(String groupId, String uri) {
+    final groups = <FolderDuplicateGroup>[];
+    for (final group in duplicateGroups) {
+      if (group.id != groupId) {
+        groups.add(group);
+        continue;
+      }
+      final updated = group.without({uri});
+      if (updated != null) groups.add(updated);
+    }
+    return FolderScanResult(
+      folderUri: folderUri,
+      folderName: folderName,
+      imagesScanned: imagesScanned,
+      duplicateGroups: List.unmodifiable(groups),
+      bestShotsScan: bestShotsScan,
+      dateRange: dateRange,
+      imagesSkipped: imagesSkipped,
+      imageFilesFound: imageFilesFound,
+      imagesOutsideDateRange: imagesOutsideDateRange,
+      scannedPhotos: scannedPhotos,
+      skippedNames: skippedNames,
+    );
+  }
+
   int get duplicateFileCount =>
       duplicateGroups.fold(0, (count, group) => count + group.photos.length);
 
@@ -227,6 +330,14 @@ class FolderScanResult {
 
   int get reclaimableBytes =>
       removablePhotos.fold(0, (total, photo) => total + photo.size);
+}
+
+/// Thrown by [FolderDuplicateScanner.scanUri] when the caller asked to stop.
+class ScanCancelled implements Exception {
+  const ScanCancelled();
+
+  @override
+  String toString() => 'Scan cancelled';
 }
 
 class FolderDuplicateScanner {
@@ -316,10 +427,14 @@ class FolderDuplicateScanner {
     bool groupSessions = false,
     FolderDateRange dateRange = FolderDateRange.currentFolder,
     void Function(int imagesScanned)? onProgress,
+    bool Function()? shouldCancel,
   }) async {
     final images = <FolderScanPhoto>[];
     var imagesScanned = 0;
     var imagesSkipped = 0;
+    var imageFilesFound = 0;
+    var imagesOutsideDateRange = 0;
+    final skippedNames = <String>[];
     Object? firstError;
     final now = DateTime.now();
     final dateThreshold = switch (dateRange) {
@@ -330,16 +445,19 @@ class FolderDuplicateScanner {
     };
 
     await for (final entry in _saf.walk(folderUri)) {
+      if (shouldCancel?.call() ?? false) throw const ScanCancelled();
       final file = entry.file;
       if (file.isDir ||
           _isSystemThumbnail(entry.relativePath) ||
           !_isImage(file.name, file.mimeType)) {
         continue;
       }
+      imageFilesFound += 1;
       if (dateThreshold != null &&
           (file.lastModified <= 0 ||
               DateTime.fromMillisecondsSinceEpoch(file.lastModified)
                   .isBefore(dateThreshold))) {
+        imagesOutsideDateRange += 1;
         continue;
       }
 
@@ -352,7 +470,7 @@ class FolderDuplicateScanner {
           );
           final modifiedAt = file.lastModified;
           analysis = await Isolate.run(
-            () => _analyzeShot(bytes, modifiedAt, useFaceSignals),
+            () => _analyzeShot(bytes, modifiedAt, file.name, useFaceSignals),
           );
         } else {
           digest = (await sha256.bind(await _saf.readFileStream(file.uri)).first)
@@ -363,6 +481,7 @@ class FolderDuplicateScanner {
           // fingerprint. Leave them out so they are never grouped together or
           // offered for deletion.
           imagesSkipped += 1;
+          skippedNames.add(entry.relativePath);
           onProgress?.call(imagesScanned + imagesSkipped);
           continue;
         }
@@ -372,11 +491,17 @@ class FolderDuplicateScanner {
             : analysis.captureTime;
         ShotFeatures? features;
         if (analysis != null) {
-          final faceImage = analysis.faceImage;
+          final faceBitmap = analysis.faceBitmap;
           features = ShotFeatures(
             signals: analysis.signals,
             megapixels: analysis.megapixels,
-            faces: faceImage == null ? null : await _detectFaces(faceImage),
+            faces: faceBitmap == null
+                ? null
+                : await _detectFaces(
+                    faceBitmap,
+                    analysis.faceWidth,
+                    analysis.faceHeight,
+                  ),
           );
         }
         // Scores are relative to the rest of a group, so they are filled in
@@ -395,6 +520,7 @@ class FolderDuplicateScanner {
           capturedAt: capturedAt,
           captureSource: captureSource,
           features: features,
+          colorHistogram: analysis?.colorHistogram,
         );
         images.add(photo);
         imagesScanned += 1;
@@ -404,6 +530,7 @@ class FolderDuplicateScanner {
         // One unreadable or corrupt file must not abort the whole scan.
         firstError ??= error;
         imagesSkipped += 1;
+        skippedNames.add(entry.relativePath);
         onProgress?.call(imagesScanned + imagesSkipped);
       }
     }
@@ -473,8 +600,16 @@ class FolderDuplicateScanner {
       bestShotsScan: bestShotsScan,
       dateRange: dateRange,
       imagesSkipped: imagesSkipped,
+      imageFilesFound: imageFilesFound,
+      imagesOutsideDateRange: imagesOutsideDateRange,
+      scannedPhotos: List.unmodifiable(images),
+      skippedNames: List.unmodifiable(skippedNames),
     );
   }
+
+  /// A preview of one file, for screens that show photos the scan did not
+  /// keep a preview for. Null when the file cannot be read or decoded.
+  Future<Uint8List?> loadPreview(String uri) => _previewFor(uri);
 
   Future<void> deleteFile(String uri) => _saf.delete(uri);
 
@@ -498,15 +633,16 @@ class FolderDuplicateScanner {
   /// Runs face detection on one analysis image. Returns null when detection
   /// fails, so the ranking treats that photo's faces as unknown rather than
   /// absent and ignores face signals for its group.
-  Future<FaceSignals?> _detectFaces(Uint8List bytes) async {
-    final temp = await getTemporaryDirectory();
-    final safeName =
-        'pictoiq-face-${DateTime.now().microsecondsSinceEpoch}.jpg';
-    final file = File(p.join(temp.path, safeName));
+  Future<FaceSignals?> _detectFaces(
+    Uint8List rgba,
+    int width,
+    int height,
+  ) async {
     try {
-      await file.writeAsBytes(bytes, flush: true);
+      // Pixels go straight to the detector. Passing a temporary image file
+      // failed on a real phone with a null-pointer error inside Android.
       final faces = await _faceDetector.processImage(
-        InputImage.fromFilePath(file.path),
+        InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
       );
       if (faces.isEmpty) return FaceSignals.none;
       double? eyesOpenMin;
@@ -514,19 +650,17 @@ class FolderDuplicateScanner {
       var smileCount = 0;
       var edgeCutoff = false;
       double? lookingAwayMax;
-      final size = readImageSize(bytes);
+      final size = (width, height);
       for (final face in faces) {
-        if (size != null) {
-          // A face this close to the border is probably cut off.
-          final box = face.boundingBox;
-          final marginX = size.$1 * 0.01;
-          final marginY = size.$2 * 0.01;
-          if (box.left < marginX ||
-              box.top < marginY ||
-              box.right > size.$1 - marginX ||
-              box.bottom > size.$2 - marginY) {
-            edgeCutoff = true;
-          }
+        // A face this close to the border is probably cut off.
+        final box = face.boundingBox;
+        final marginX = size.$1 * 0.01;
+        final marginY = size.$2 * 0.01;
+        if (box.left < marginX ||
+            box.top < marginY ||
+            box.right > size.$1 - marginX ||
+            box.bottom > size.$2 - marginY) {
+          edgeCutoff = true;
         }
         final yaw = face.headEulerAngleY;
         if (yaw != null) {
@@ -555,30 +689,48 @@ class FolderDuplicateScanner {
         edgeCutoff: edgeCutoff,
         lookingAwayMax: lookingAwayMax,
       );
-    } catch (error) {
-      debugPrint('Face signals unavailable: ${error.runtimeType}');
+    } on PlatformException catch (error) {
+      // Keep the detail: the type alone cannot tell a missing model from a
+      // bad input image.
+      debugPrint(
+        'Face signals unavailable: PlatformException '
+        'code=${error.code} message=${error.message} details=${error.details}',
+      );
       return null;
-    } finally {
-      if (await file.exists()) await file.delete();
+    } catch (error) {
+      debugPrint('Face signals unavailable: ${error.runtimeType} $error');
+      return null;
     }
   }
 
   static _ShotAnalysis? _analyzeShot(
     Uint8List bytes,
     int modifiedAt,
+    String fileName,
     bool includeFaceImage,
   ) {
     final decoded = decodeAnalysisImage(bytes);
     if (decoded == null) return null;
     final (width, height) =
         readImageSize(bytes) ?? (decoded.width, decoded.height);
+    Uint8List? faceBitmap;
+    if (includeFaceImage) {
+      final rgba = decoded
+          .convert(format: img.Format.uint8, numChannels: 4)
+          .getBytes(order: img.ChannelOrder.rgba);
+      // The detector needs exactly width x height x 4 bytes.
+      if (rgba.length == decoded.width * decoded.height * 4) faceBitmap = rgba;
+    }
     return _ShotAnalysis(
       visualHash: differenceHash(decoded),
-      captureTime: captureTimeOf(decoded, modifiedAt),
+      captureTime: captureTimeOf(decoded, modifiedAt, fileName: fileName),
       signals: measureImage(decoded),
       megapixels: width * height / 1000000,
       preview: encodePreview(decoded),
-      faceImage: includeFaceImage ? img.encodeJpg(decoded, quality: 90) : null,
+      faceBitmap: faceBitmap,
+      faceWidth: decoded.width,
+      faceHeight: decoded.height,
+      colorHistogram: colorHistogram(decoded),
     );
   }
 
@@ -596,6 +748,7 @@ class FolderDuplicateScanner {
             capturedAt: photo.capturedAt,
             captureSource: photo.captureSource,
             tieBreaker: photo.relativePath,
+            colorHistogram: photo.colorHistogram,
           ),
       ],
       thresholds: thresholds,
@@ -611,32 +764,7 @@ class FolderDuplicateScanner {
   FolderDuplicateGroup _rankedGroup(
     List<FolderScanPhoto> members,
     SimilarityEvidence evidence,
-  ) {
-    final ranking = rankShots([
-      for (final photo in members)
-        ShotInput(
-          id: photo.uri,
-          features: photo.features ?? ShotFeatures.unknown,
-          tieBreaker: photo.relativePath,
-        ),
-    ]);
-    final ranked = <FolderScanPhoto>[];
-    for (final photo in members) {
-      final shot = ranking.shotFor(photo.uri)!;
-      ranked.add(
-        photo.withQuality(
-          score: shot.score,
-          notes: [...shot.strengths, ...shot.concerns],
-        ),
-      );
-    }
-    return FolderDuplicateGroup(
-      id: members.first.uri,
-      photos: ranked,
-      evidence: evidence,
-      ranking: ranking,
-    );
-  }
+  ) => rankedGroup(members, evidence);
 
   bool _isImage(String name, String? mimeType) {
     if (mimeType?.toLowerCase().startsWith('image/') ?? false) return true;
@@ -646,4 +774,37 @@ class FolderDuplicateScanner {
   bool _isSystemThumbnail(String relativePath) => p
       .split(relativePath)
       .any((segment) => segment.toLowerCase() == '.thumbnails');
+}
+
+/// Ranks [members] against each other and builds the group, copying each
+/// photo's group-relative score and reasons onto it.
+FolderDuplicateGroup rankedGroup(
+  List<FolderScanPhoto> members,
+  SimilarityEvidence evidence, {
+  String? id,
+}) {
+  final ranking = rankShots([
+    for (final photo in members)
+      ShotInput(
+        id: photo.uri,
+        features: photo.features ?? ShotFeatures.unknown,
+        tieBreaker: photo.relativePath,
+      ),
+  ]);
+  final ranked = <FolderScanPhoto>[];
+  for (final photo in members) {
+    final shot = ranking.shotFor(photo.uri)!;
+    ranked.add(
+      photo.withQuality(
+        score: shot.score,
+        notes: [...shot.strengths, ...shot.concerns],
+      ),
+    );
+  }
+  return FolderDuplicateGroup(
+    id: id ?? members.first.uri,
+    photos: ranked,
+    evidence: evidence,
+    ranking: ranking,
+  );
 }

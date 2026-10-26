@@ -64,7 +64,7 @@ void main() {
   });
 
   test('raising the link distance trades precision for recall', () {
-    // Frames of one scene that differ by 12 bits are only found when the
+    // Frames of one scene that differ by 16 bits are only found when the
     // limit is loosened, which also starts merging unrelated shots.
     final candidates = [
       SimilarityCandidate(
@@ -74,7 +74,7 @@ void main() {
         tieBreaker: 'x1',
       ),
       SimilarityCandidate(
-        visualHash: _bits(12),
+        visualHash: _bits(16),
         capturedAt: _t0 + 1000,
         captureSource: CaptureSource.exif,
         tieBreaker: 'x2',
@@ -84,7 +84,7 @@ void main() {
     expect(
       clusterSimilar(
         candidates,
-        thresholds: const SimilarityThresholds(maxLinkDistance: 12),
+        thresholds: const SimilarityThresholds(maxLinkDistance: 16),
       ),
       hasLength(1),
     );

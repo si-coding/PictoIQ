@@ -43,11 +43,12 @@ Future<void> main(List<String> args) async {
       continue;
     }
     final modified = (await file.lastModified()).millisecondsSinceEpoch;
-    final (time, source) = captureTimeOf(image, modified);
+    final (time, source) = captureTimeOf(image, modified, fileName: entry.key);
     names.add(entry.key);
     candidates.add(
       SimilarityCandidate(
         visualHash: differenceHash(image),
+        colorHistogram: colorHistogram(image),
         capturedAt: time,
         captureSource: source,
         tieBreaker: entry.key,
@@ -87,6 +88,26 @@ Future<void> main(List<String> args) async {
         '${high.precision.toStringAsFixed(3)}',
       );
     }
+  }
+
+  // Quick shots (same moment): how loose the colour test can be.
+  stdout.writeln('');
+  for (final color in [0.05, 0.1, 0.15, 0.2, 0.25, 0.3]) {
+    final clusters = clusterSimilar(
+      candidates,
+      thresholds: SimilarityThresholds(burstColorDistance: color),
+    );
+    final metrics = evaluateGrouping(
+      truth: usable,
+      predicted: [
+        for (final c in clusters) [for (final i in c.members) names[i]],
+      ],
+    );
+    stdout.writeln(
+      'burst colour $color: ${clusters.length} groups, '
+      'precision ${metrics.precision.toStringAsFixed(3)}, '
+      'recall ${metrics.recall.toStringAsFixed(3)}',
+    );
   }
 
   // Same-session mode: label photos of one photo session with a shared scene
