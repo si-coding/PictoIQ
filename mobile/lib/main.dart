@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'app_settings.dart';
+import 'event_grouping.dart';
 import 'folder_duplicate_scanner.dart';
 import 'library_store.dart';
 import 'photo_asset.dart';
@@ -208,7 +209,12 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
         useFaceSignals: _settings.useFaceSignals,
-        groupSessions: _settings.groupSessions,
+        thresholds: SimilarityThresholds.forLevel(
+          _settings.matchLevel,
+          splitByPeople: _settings.splitByPeople,
+          timeMode: _settings.timeMode,
+        ),
+        documentMode: _settings.documentMode,
         dateRange: _folderDateRange,
         onProgress: (count) {
           if (mounted) setState(() => _folderImagesScanned = count);
@@ -230,7 +236,7 @@ class _LibraryPageState extends State<LibraryPage> {
         result.duplicateGroups.isEmpty
             ? _noGroupsText(result, bestShots: bestShots)
             : bestShots
-            ? 'Found ${result.duplicateGroups.length} similar-photo groups in ${result.folderName}. They are similar, not identical, so review them before deleting.${_skippedNote(result.imagesSkipped)}'
+            ? 'Found ${result.duplicateGroups.length} similar-photo groups in ${result.folderName}. They are similar, not identical, so review them before deleting.${_skippedNote(result.imagesSkipped)}${_documentNote(result)}'
             : 'Found ${result.duplicateGroups.length} exact duplicate groups in ${result.folderName}.${_skippedNote(result.imagesSkipped)}',
       );
     } on ScanCancelled {
@@ -1583,7 +1589,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Text(
                 scan.duplicateGroups.isEmpty
                     ? _noGroupsText(scan, bestShots: bestShots)
-                    : 'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.dateRange.label}${_skippedNote(scan.imagesSkipped)}',
+                    : 'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.dateRange.label}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
               ),
               Align(
@@ -1640,17 +1646,14 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
               child: Text(
                 bestShots
-                    ? 'No similar photo groups found. PictoIQ groups visually alike shots and ranks face quality when faces are detected.'
+                    ? 'No similar photo groups found. PictoIQ groups visually alike shots taken close together and ranks face quality when faces are detected.'
                     : 'No exact duplicate photos found. Exact duplicates have identical file contents.',
                 style: TextStyle(color: Color(0xFF77796F)),
               ),
             ),
           )
         else
-          ...[
-            for (final group in scan.duplicateGroups)
-              if (!bestShots || _matchesFilter(group)) group,
-          ].map(bestShots ? _folderDuplicateCard : _exactDuplicateCard),
+          ..._resultCards(scan, bestShots: bestShots),
         if (bestShots &&
             scan.duplicateGroups.isNotEmpty &&
             !scan.duplicateGroups.any(_matchesFilter))
@@ -1664,6 +1667,86 @@ class _LibraryPageState extends State<LibraryPage> {
       ],
     );
   }
+
+  /// The group cards. For best shots they are organised as Event > Scene:
+  /// each heading is a stretch of time (a day, an outing) and the cards below
+  /// are the scenes in it where similar shots were found. Events are only for
+  /// browsing; cleanup decisions are still made per scene.
+  List<Widget> _resultCards(FolderScanResult scan, {required bool bestShots}) {
+    final groups = [
+      for (final group in scan.duplicateGroups)
+        if (!bestShots || _matchesFilter(group)) group,
+    ];
+    if (!bestShots) return groups.map(_exactDuplicateCard).toList();
+    final photos = scan.scannedPhotos;
+    // Grouping ignores time. Headings only use times that describe the
+    // picture (camera time, or a date in the file name); a file's modified
+    // time just says when it was copied, so those photos are undated.
+    bool trusted(FolderScanPhoto photo) =>
+        photo.captureSource == CaptureSource.exif ||
+        photo.captureSource == CaptureSource.day;
+    final events = clusterEvents([
+      for (final photo in photos)
+        EventInput(
+          capturedAt: trusted(photo) ? photo.capturedAt : 0,
+          captureSource: trusted(photo)
+              ? photo.captureSource
+              : CaptureSource.unknown,
+          tieBreaker: photo.relativePath,
+        ),
+    ]);
+    final headings =
+        _settings.showEvents && events.any((event) => !event.isUndated);
+    final eventOfUri = <String, int>{
+      for (var e = 0; e < events.length; e++)
+        for (final index in events[e].members) photos[index].uri: e,
+    };
+    int eventOf(FolderDuplicateGroup group) {
+      var best = events.length;
+      for (final photo in group.photos) {
+        final e = eventOfUri[photo.uri];
+        if (e != null && e < best) best = e;
+      }
+      return best;
+    }
+
+    final byEvent = <int, List<FolderDuplicateGroup>>{};
+    for (final group in groups) {
+      byEvent.putIfAbsent(eventOf(group), () => []).add(group);
+    }
+    final order = byEvent.keys.toList()..sort();
+    return [
+      for (final key in order) ...[
+        if (headings && key < events.length)
+          _eventHeader(events[key], scenes: byEvent[key]!.length),
+        ...byEvent[key]!.map(_folderDuplicateCard),
+      ],
+    ];
+  }
+
+  String _documentNote(FolderScanResult scan) => scan.documentsLeftOut == 0
+      ? ''
+      : ' ${scan.documentsLeftOut} document-like image${scan.documentsLeftOut == 1 ? ' was' : 's were'} left out.';
+
+  Widget _eventHeader(PhotoEvent event, {required int scenes}) => Padding(
+    padding: const EdgeInsets.only(top: 16),
+    child: Row(
+      children: [
+        const Icon(Icons.event_outlined, size: 18, color: _green),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(
+            eventLabel(event),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+          ),
+        ),
+        Text(
+          '${event.members.length} photos · $scenes scene${scenes == 1 ? '' : 's'}',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
+        ),
+      ],
+    ),
+  );
 
   Widget _spaceRecoverySummary(
     FolderScanResult scan, {
@@ -2213,7 +2296,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     alignment: Alignment.centerLeft,
                     child: FilterChip(
                       label: Text(
-                        'Finalists only (${ranking!.finalists.length})',
+                        'Finalists only (${ranking.finalists.length})',
                       ),
                       selected: finalistsOnly,
                       onSelected: (value) =>
@@ -2648,16 +2731,115 @@ class _LibraryPageState extends State<LibraryPage> {
                     setDialogState(() {});
                   },
                 ),
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'How closely photos must match',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<MatchLevel>(
+                  showSelectedIcon: false,
+                  segments: [
+                    for (final level in MatchLevel.values)
+                      ButtonSegment(value: level, label: Text(level.label)),
+                  ],
+                  selected: {_settings.matchLevel},
+                  onSelectionChanged: (value) {
+                    _updateSettings(_settings.copyWith(matchLevel: value.first));
+                    setDialogState(() {});
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '${_settings.matchLevel.description} Applies to the next scan.',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Also use time taken',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<TimeMode>(
+                  showSelectedIcon: false,
+                  segments: [
+                    for (final mode in TimeMode.values)
+                      ButtonSegment(value: mode, label: Text(mode.label)),
+                  ],
+                  selected: {_settings.timeMode},
+                  onSelectionChanged: (value) {
+                    _updateSettings(_settings.copyWith(timeMode: value.first));
+                    setDialogState(() {});
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '${_settings.timeMode.description}${_settings.timeMode == TimeMode.off || _settings.timeMode == TimeMode.hint ? '' : ' Uses camera time, else a date in the file name, else the file date; files that were copied or downloaded can carry misleading dates, and then fewer photos will group.'} Applies to the next scan.',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Documents and screenshots of pages',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<DocumentMode>(
+                  showSelectedIcon: false,
+                  segments: [
+                    for (final mode in DocumentMode.values)
+                      ButtonSegment(value: mode, label: Text(mode.label)),
+                  ],
+                  selected: {_settings.documentMode},
+                  onSelectionChanged: (value) {
+                    _updateSettings(
+                      _settings.copyWith(documentMode: value.first),
+                    );
+                    setDialogState(() {});
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    '${_settings.documentMode.description} Applies to the next scan.',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Group photos from the same session'),
+                  title: const Text('Keep different people apart'),
                   subtitle: const Text(
-                    'Also groups photos of the same people and place taken up to 10 minutes apart, even when poses differ, so you can pick the one worth framing. These groups are never cleaned up in bulk. Applies to the next scan.',
+                    'Keeps photos with different numbers of people, or a main person dressed in clearly different colours, in separate groups. A rough check, not face recognition. Needs "Use faces and eyes" on. Applies to the next scan.',
                     style: TextStyle(fontSize: 12),
                   ),
-                  value: _settings.groupSessions,
+                  value: _settings.splitByPeople,
                   onChanged: (value) {
-                    _updateSettings(_settings.copyWith(groupSessions: value));
+                    _updateSettings(_settings.copyWith(splitByPeople: value));
+                    setDialogState(() {});
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Show event headings'),
+                  subtitle: const Text(
+                    'Lists groups under a date heading when the camera time or a date in the file name is known. Never affects what is grouped.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  value: _settings.showEvents,
+                  onChanged: (value) {
+                    _updateSettings(_settings.copyWith(showEvents: value));
                     setDialogState(() {});
                   },
                 ),

@@ -25,6 +25,9 @@ class _ShotAnalysis {
     required this.faceWidth,
     required this.faceHeight,
     required this.colorHistogram,
+    required this.colorLayout,
+    required this.isDocument,
+    required this.documentDetail,
   });
 
   final int visualHash;
@@ -41,6 +44,13 @@ class _ShotAnalysis {
 
   /// Colour profile used to link quick shots whose framing differs.
   final List<double> colorHistogram;
+
+  /// Where the colours are, used to tell scenes apart by their background.
+  final List<double> colorLayout;
+
+  /// Looks like a page of text or similar (see [looksLikeDocument]).
+  final bool isDocument;
+  final List<double>? documentDetail;
 }
 
 class FolderScanPhoto {
@@ -59,6 +69,9 @@ class FolderScanPhoto {
     this.captureSource = captureSourceUnknown,
     this.features,
     this.colorHistogram,
+    this.colorLayout,
+    this.isDocument = false,
+    this.documentDetail,
   });
 
   /// Where [capturedAt] came from. Times from different sources are never
@@ -90,6 +103,17 @@ class FolderScanPhoto {
   /// Colour profile for grouping quick shots; null for exact-duplicate scans.
   final List<double>? colorHistogram;
 
+  /// Colour arrangement for grouping by content; null for exact scans.
+  final List<double>? colorLayout;
+
+  /// Document-like image; faces found later can override this.
+  final bool isDocument;
+  final List<double>? documentDetail;
+
+  /// True for a document-like image with no faces in it.
+  bool get isDocumentLike =>
+      isDocument && (features?.faces?.count ?? 0) == 0;
+
   FolderScanPhoto withPreviewBytes(Uint8List? bytes) => FolderScanPhoto(
     uri: uri,
     name: name,
@@ -105,6 +129,9 @@ class FolderScanPhoto {
     captureSource: captureSource,
     features: features,
     colorHistogram: colorHistogram,
+    colorLayout: colorLayout,
+    isDocument: isDocument,
+    documentDetail: documentDetail,
   );
 
   /// Copy carrying the group-relative score and reasons from [rankShots].
@@ -126,6 +153,9 @@ class FolderScanPhoto {
     captureSource: captureSource,
     features: features,
     colorHistogram: colorHistogram,
+    colorLayout: colorLayout,
+    isDocument: isDocument,
+    documentDetail: documentDetail,
   );
 
   DateTime? get modifiedDate =>
@@ -237,6 +267,7 @@ class FolderScanResult {
     this.imagesOutsideDateRange = 0,
     this.scannedPhotos = const [],
     this.skippedNames = const [],
+    this.documentsLeftOut = 0,
   });
 
   final String folderUri;
@@ -262,6 +293,9 @@ class FolderScanResult {
 
   /// Paths of files that could not be read or decoded.
   final List<String> skippedNames;
+
+  /// Document-like images left out of grouping (see [DocumentMode]).
+  final int documentsLeftOut;
 
   /// This result after the photos in [removed] were deleted: groups shrink
   /// or disappear and similar-photo groups are re-ranked, without scanning the
@@ -290,6 +324,7 @@ class FolderScanResult {
           if (!removed.contains(photo.uri)) photo,
       ]),
       skippedNames: skippedNames,
+      documentsLeftOut: documentsLeftOut,
     );
   }
 
@@ -318,6 +353,7 @@ class FolderScanResult {
       imagesOutsideDateRange: imagesOutsideDateRange,
       scannedPhotos: scannedPhotos,
       skippedNames: skippedNames,
+      documentsLeftOut: documentsLeftOut,
     );
   }
 
@@ -343,7 +379,7 @@ class ScanCancelled implements Exception {
 class FolderDuplicateScanner {
   FolderDuplicateScanner({
     Saf? saf,
-    this.thresholds = const SimilarityThresholds(),
+    this.thresholds = SimilarityThresholds.content,
   }) : _saf = saf ?? Saf();
 
   final Saf _saf;
@@ -425,6 +461,8 @@ class FolderDuplicateScanner {
     bool bestShotsScan = false,
     bool useFaceSignals = true,
     bool groupSessions = false,
+    SimilarityThresholds? thresholds,
+    DocumentMode documentMode = DocumentMode.leaveOut,
     FolderDateRange dateRange = FolderDateRange.currentFolder,
     void Function(int imagesScanned)? onProgress,
     bool Function()? shouldCancel,
@@ -521,6 +559,9 @@ class FolderDuplicateScanner {
           captureSource: captureSource,
           features: features,
           colorHistogram: analysis?.colorHistogram,
+          colorLayout: analysis?.colorLayout,
+          isDocument: analysis?.isDocument ?? false,
+          documentDetail: analysis?.documentDetail,
         );
         images.add(photo);
         imagesScanned += 1;
@@ -545,7 +586,8 @@ class FolderDuplicateScanner {
       duplicates.addAll(
         _groupSimilarShots(
           images,
-          groupSessions ? SimilarityThresholds.session : thresholds,
+          thresholds ?? this.thresholds,
+          documentMode,
         ),
       );
       duplicates.sort((a, b) {
@@ -604,6 +646,9 @@ class FolderDuplicateScanner {
       imagesOutsideDateRange: imagesOutsideDateRange,
       scannedPhotos: List.unmodifiable(images),
       skippedNames: List.unmodifiable(skippedNames),
+      documentsLeftOut: bestShotsScan && documentMode == DocumentMode.leaveOut
+          ? images.where((photo) => photo.isDocumentLike).length
+          : 0,
     );
   }
 
@@ -682,8 +727,28 @@ class FolderDuplicateScanner {
           smileCount++;
         }
       }
+      // Colours below the largest face, a rough way to tell differently
+      // dressed people apart. Starts under the chin to skip skin.
+      final main = faces.reduce(
+        (a, b) =>
+            a.boundingBox.width * a.boundingBox.height >=
+                b.boundingBox.width * b.boundingBox.height
+            ? a
+            : b,
+      );
+      final mainBox = main.boundingBox;
+      final subjectColors = regionHistogram(
+        rgba,
+        width,
+        height,
+        (mainBox.center.dx - mainBox.width * 0.8).round(),
+        mainBox.bottom.round(),
+        (mainBox.center.dx + mainBox.width * 0.8).round(),
+        (mainBox.bottom + mainBox.height * 2.5).round(),
+      );
       return FaceSignals(
         count: faces.length,
+        subjectColors: subjectColors,
         eyesOpenMin: eyesOpenMin,
         smileAverage: smileCount == 0 ? null : smileTotal / smileCount,
         edgeCutoff: edgeCutoff,
@@ -721,6 +786,7 @@ class FolderDuplicateScanner {
       // The detector needs exactly width x height x 4 bytes.
       if (rgba.length == decoded.width * decoded.height * 4) faceBitmap = rgba;
     }
+    final isDocument = looksLikeDocument(decoded);
     return _ShotAnalysis(
       visualHash: differenceHash(decoded),
       captureTime: captureTimeOf(decoded, modifiedAt, fileName: fileName),
@@ -731,15 +797,23 @@ class FolderDuplicateScanner {
       faceWidth: decoded.width,
       faceHeight: decoded.height,
       colorHistogram: colorHistogram(decoded),
+      colorLayout: colorLayout(decoded),
+      isDocument: isDocument,
+      documentDetail: isDocument ? documentDetail(decoded) : null,
     );
   }
 
   /// Groups visually similar photos, rates how sure each group is, and ranks
   /// the photos inside it.
   List<FolderDuplicateGroup> _groupSimilarShots(
-    List<FolderScanPhoto> images,
+    List<FolderScanPhoto> allImages,
     SimilarityThresholds thresholds,
+    DocumentMode documentMode,
   ) {
+    final images = [
+      for (final photo in allImages)
+        if (documentMode == DocumentMode.strict || !photo.isDocumentLike) photo,
+    ];
     final clusters = clusterSimilar(
       [
         for (final photo in images)
@@ -749,6 +823,11 @@ class FolderDuplicateScanner {
             captureSource: photo.captureSource,
             tieBreaker: photo.relativePath,
             colorHistogram: photo.colorHistogram,
+            colorLayout: photo.colorLayout,
+            faceCount: photo.features?.faces?.count,
+            subjectColors: photo.features?.faces?.subjectColors,
+            isDocument: photo.isDocumentLike,
+            documentDetail: photo.documentDetail,
           ),
       ],
       thresholds: thresholds,

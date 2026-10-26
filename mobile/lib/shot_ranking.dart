@@ -112,6 +112,7 @@ class FaceSignals {
     required this.smileAverage,
     this.edgeCutoff = false,
     this.lookingAwayMax,
+    this.subjectColors,
   });
 
   static const none = FaceSignals(
@@ -136,6 +137,10 @@ class FaceSignals {
   /// Largest head turn away from the camera, in degrees, over all faces
   /// (0 = facing the camera). Null when unknown.
   final double? lookingAwayMax;
+
+  /// Colours below the largest face (clothing), used only to keep photos of
+  /// differently dressed people out of one group. Null when not measured.
+  final List<double>? subjectColors;
 }
 
 /// Everything the ranking needs to know about one photo.

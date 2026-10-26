@@ -49,6 +49,7 @@ Future<void> main(List<String> args) async {
       SimilarityCandidate(
         visualHash: differenceHash(image),
         colorHistogram: colorHistogram(image),
+        colorLayout: colorLayout(image),
         capturedAt: time,
         captureSource: source,
         tieBreaker: entry.key,
@@ -134,5 +135,37 @@ Future<void> main(List<String> args) async {
       'precision ${metrics.precision.toStringAsFixed(3)}, '
       'recall ${metrics.recall.toStringAsFixed(3)}',
     );
+  }
+
+  // Content-only mode (what the app uses): no time involved.
+  stdout.writeln('');
+  stdout.writeln('content mode: hash link / layout link / shift layout');
+  for (final hash in [8, 10, 12]) {
+    for (final layout in [0.06, 0.10, 0.14]) {
+      for (final shift in [0.04, 0.07, 0.10]) {
+        final clusters = clusterSimilar(
+          candidates,
+          thresholds: SimilarityThresholds(
+            useCaptureTime: false,
+            maxLinkDistance: hash,
+            layoutLinkDistance: layout,
+            shiftLayoutDistance: shift,
+            highDistance: 4,
+            mediumDistance: 20,
+          ),
+        );
+        final metrics = evaluateGrouping(
+          truth: usable,
+          predicted: [
+            for (final c in clusters) [for (final i in c.members) names[i]],
+          ],
+        );
+        stdout.writeln(
+          '$hash / $layout / $shift: ${clusters.length} groups, '
+          'precision ${metrics.precision.toStringAsFixed(3)}, '
+          'recall ${metrics.recall.toStringAsFixed(3)}',
+        );
+      }
+    }
   }
 }
