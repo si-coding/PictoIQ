@@ -26,8 +26,10 @@ class ImageSignals {
     shadowClip: 0,
   );
 
-  /// Variance of the Laplacian at [_measureEdge] pixels. Only meaningful when
-  /// compared with other photos of the same scene: higher means sharper.
+  /// Laplacian variance of the sharpest quarter of the frame at
+  /// [_measureEdge] pixels (so a blurred portrait-mode background does not
+  /// count against a crisp subject). Only meaningful when compared with
+  /// other photos of the same scene: higher means sharper.
   final double sharpness;
 
   /// Average brightness, 0 (black) to 255 (white).
@@ -74,26 +76,51 @@ ImageSignals measureImage(img.Image image) {
     }
   }
 
+  // Sharpness is the Laplacian variance of the sharpest quarter of a grid of
+  // tiles, not of the whole frame. Portrait mode and shallow depth of field
+  // blur the background on purpose, and the whole-frame figure would call
+  // such a photo soft even though its subject is crisp. A photo that is soft
+  // everywhere still scores low, because every tile is soft.
   var variance = 0.0;
   if (width >= 3 && height >= 3) {
-    var lapSum = 0.0;
-    var lapSquares = 0.0;
-    for (var y = 1; y < height - 1; y++) {
-      for (var x = 1; x < width - 1; x++) {
-        final i = y * width + x;
-        final laplacian =
-            luma[i - width] +
-            luma[i + width] +
-            luma[i - 1] +
-            luma[i + 1] -
-            4 * luma[i];
-        lapSum += laplacian;
-        lapSquares += laplacian * laplacian;
+    final grid = math.max(1, math.min(6, math.min(width, height) ~/ 16));
+    final tiles = <double>[];
+    for (var ty = 0; ty < grid; ty++) {
+      for (var tx = 0; tx < grid; tx++) {
+        final x0 = math.max(1, tx * width ~/ grid);
+        final x1 = math.min(width - 1, (tx + 1) * width ~/ grid);
+        final y0 = math.max(1, ty * height ~/ grid);
+        final y1 = math.min(height - 1, (ty + 1) * height ~/ grid);
+        if (x1 <= x0 || y1 <= y0) continue;
+        var lapSum = 0.0;
+        var lapSquares = 0.0;
+        for (var y = y0; y < y1; y++) {
+          for (var x = x0; x < x1; x++) {
+            final i = y * width + x;
+            final laplacian =
+                luma[i - width] +
+                luma[i + width] +
+                luma[i - 1] +
+                luma[i + 1] -
+                4 * luma[i];
+            lapSum += laplacian;
+            lapSquares += laplacian * laplacian;
+          }
+        }
+        final samples = (x1 - x0) * (y1 - y0);
+        final mean = lapSum / samples;
+        tiles.add(math.max(0.0, lapSquares / samples - mean * mean));
       }
     }
-    final samples = (width - 2) * (height - 2);
-    final mean = lapSum / samples;
-    variance = math.max(0.0, lapSquares / samples - mean * mean);
+    if (tiles.isNotEmpty) {
+      tiles.sort((a, b) => b.compareTo(a));
+      final keep = math.max(1, (tiles.length / 4).ceil());
+      var total = 0.0;
+      for (var i = 0; i < keep; i++) {
+        total += tiles[i];
+      }
+      variance = total / keep;
+    }
   }
 
   return ImageSignals(

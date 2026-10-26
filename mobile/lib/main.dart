@@ -2691,6 +2691,29 @@ class _LibraryPageState extends State<LibraryPage> {
     ],
   );
 
+  /// Options as wrapping chips, so a label never breaks in the middle of a
+  /// word the way it can in a narrow segmented button.
+  Widget _choiceRow<T>({
+    required List<T> values,
+    required T selected,
+    required String Function(T) label,
+    required ValueChanged<T> onSelected,
+  }) => Align(
+    alignment: Alignment.centerLeft,
+    child: Wrap(
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        for (final value in values)
+          ChoiceChip(
+            label: Text(label(value)),
+            selected: value == selected,
+            onSelected: (_) => onSelected(value),
+          ),
+      ],
+    ),
+  );
+
   Future<void> _showSettings() => showDialog<void>(
     context: context,
     builder: (dialogContext) => StatefulBuilder(
@@ -2740,15 +2763,12 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                SegmentedButton<MatchLevel>(
-                  showSelectedIcon: false,
-                  segments: [
-                    for (final level in MatchLevel.values)
-                      ButtonSegment(value: level, label: Text(level.label)),
-                  ],
-                  selected: {_settings.matchLevel},
-                  onSelectionChanged: (value) {
-                    _updateSettings(_settings.copyWith(matchLevel: value.first));
+                _choiceRow<MatchLevel>(
+                  values: MatchLevel.values,
+                  selected: _settings.matchLevel,
+                  label: (level) => level.label,
+                  onSelected: (level) {
+                    _updateSettings(_settings.copyWith(matchLevel: level));
                     setDialogState(() {});
                   },
                 ),
@@ -2768,15 +2788,12 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                SegmentedButton<TimeMode>(
-                  showSelectedIcon: false,
-                  segments: [
-                    for (final mode in TimeMode.values)
-                      ButtonSegment(value: mode, label: Text(mode.label)),
-                  ],
-                  selected: {_settings.timeMode},
-                  onSelectionChanged: (value) {
-                    _updateSettings(_settings.copyWith(timeMode: value.first));
+                _choiceRow<TimeMode>(
+                  values: TimeMode.values,
+                  selected: _settings.timeMode,
+                  label: (mode) => mode.label,
+                  onSelected: (mode) {
+                    _updateSettings(_settings.copyWith(timeMode: mode));
                     setDialogState(() {});
                   },
                 ),
@@ -2796,17 +2813,12 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                SegmentedButton<DocumentMode>(
-                  showSelectedIcon: false,
-                  segments: [
-                    for (final mode in DocumentMode.values)
-                      ButtonSegment(value: mode, label: Text(mode.label)),
-                  ],
-                  selected: {_settings.documentMode},
-                  onSelectionChanged: (value) {
-                    _updateSettings(
-                      _settings.copyWith(documentMode: value.first),
-                    );
+                _choiceRow<DocumentMode>(
+                  values: DocumentMode.values,
+                  selected: _settings.documentMode,
+                  label: (mode) => mode.label,
+                  onSelected: (mode) {
+                    _updateSettings(_settings.copyWith(documentMode: mode));
                     setDialogState(() {});
                   },
                 ),

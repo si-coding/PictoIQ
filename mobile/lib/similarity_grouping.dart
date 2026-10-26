@@ -394,6 +394,7 @@ class SimilarityThresholds {
     this.histHashDistance = 32,
     this.trustedGapMs = 0,
     this.trustedColorDistance = 0.25,
+    this.trustedLayoutDistance = 0.16,
   });
 
   /// Groups photos by what is in them, ignoring when they were taken or
@@ -472,6 +473,7 @@ class SimilarityThresholds {
         histLayoutDistance: 0.07,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
         trustedColorDistance: 0.15,
+        trustedLayoutDistance: 0.10,
       ),
       MatchLevel.balanced => SimilarityThresholds(
         useCaptureTime: false,
@@ -484,6 +486,7 @@ class SimilarityThresholds {
         histLayoutDistance: 0.10,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
         trustedColorDistance: 0.25,
+        trustedLayoutDistance: 0.16,
       ),
       MatchLevel.loose => SimilarityThresholds(
         useCaptureTime: false,
@@ -500,6 +503,7 @@ class SimilarityThresholds {
         histLayoutDistance: 0.13,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
         trustedColorDistance: 0.30,
+        trustedLayoutDistance: 0.22,
       ),
     };
   }
@@ -524,6 +528,10 @@ class SimilarityThresholds {
   /// 0 turns it off.
   final int trustedGapMs;
   final double trustedColorDistance;
+
+  /// ...and their colour layouts by at most this much, so two different
+  /// places saved in the same second (an app export, a carousel) do not link.
+  final double trustedLayoutDistance;
 
   /// Content mode, document images: both limits must hold for a link.
   final int documentHashDistance;
@@ -961,7 +969,11 @@ List<SimilarityCluster> _clusterByContent(
         linked =
             histA != null &&
             histB != null &&
-            histogramDistance(histA, histB) <= thresholds.trustedColorDistance;
+            a != null &&
+            b != null &&
+            histogramDistance(histA, histB) <=
+                thresholds.trustedColorDistance &&
+            layoutDistance(a, b) <= thresholds.trustedLayoutDistance;
       }
       if (linked) parent[find(i)] = find(j);
     }

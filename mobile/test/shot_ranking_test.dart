@@ -286,6 +286,24 @@ void main() {
       expect(crisp.sharpness, greaterThan(blurred.sharpness * 2));
     });
 
+    test('a crisp subject on a blurred background is not judged soft', () {
+      // Crisp checkerboard only in the middle, flat grey around it, like a
+      // portrait-mode photo.
+      final portrait = img.Image(width: 200, height: 200);
+      for (var y = 0; y < 200; y++) {
+        for (var x = 0; x < 200; x++) {
+          final inside = x >= 40 && x < 160 && y >= 40 && y < 160;
+          final shade = inside ? (((x ~/ 4) + (y ~/ 4)).isEven ? 0 : 255) : 128;
+          portrait.setPixelRgb(x, y, shade, shade, shade);
+        }
+      }
+      final blurred = measureImage(img.gaussianBlur(_checkerboard(), radius: 3));
+      expect(
+        measureImage(portrait).sharpness,
+        greaterThan(blurred.sharpness * 2),
+      );
+    });
+
     test('detects blown highlights and crushed shadows', () {
       final white = measureImage(_solid(255));
       expect(white.highlightClip, closeTo(1, 0.01));

@@ -837,7 +837,7 @@ void main() {
 
     test('a reliable camera time within 10 s confirms a colour match', () {
       // Different layout and structure, same colours, 5 s apart.
-      final shots = [shot('a', 0, 0.5), shot('b', _bits(33), 0.7, seconds: 5)];
+      final shots = [shot('a', 0, 0.5), shot('b', _bits(33), 0.6, seconds: 5)];
       final hint = SimilarityThresholds.forLevel(
         MatchLevel.balanced,
         timeMode: TimeMode.hint,
@@ -857,11 +857,22 @@ void main() {
       );
       final modified = [
         shot('a', 0, 0.5, source: CaptureSource.modified),
-        shot('b', _bits(33), 0.7, seconds: 5, source: CaptureSource.modified),
+        shot('b', _bits(33), 0.6, seconds: 5, source: CaptureSource.modified),
       ];
       expect(clusterSimilar(modified, thresholds: hint), isEmpty);
-      final slow = [shot('a', 0, 0.5), shot('b', _bits(33), 0.7, seconds: 20)];
+      final slow = [shot('a', 0, 0.5), shot('b', _bits(33), 0.6, seconds: 20)];
       expect(clusterSimilar(slow, thresholds: hint), isEmpty);
+    });
+
+    test('same-second photos of different places stay apart', () {
+      // Saved together by an app: same time, similar palette, but the colour
+      // layouts (where things are) are far apart.
+      final hint = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.hint,
+      );
+      final shots = [shot('a', 0, 0.5), shot('b', _bits(26), 0.75)];
+      expect(clusterSimilar(shots, thresholds: hint), isEmpty);
     });
 
     test('a time in the file name beats the modified time', () {
