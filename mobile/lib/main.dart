@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,6 +78,14 @@ class _LibraryPageState extends State<LibraryPage> {
   /// How many files each folder had last time it was listed, so a rescan can
   /// show a real percentage for the listing step.
   final Map<String, int> _expectedFiles = {};
+
+  /// How long listing each folder took last time (seconds), for an estimate.
+  final Map<String, int> _listingSeconds = {};
+
+  /// When the running scan started, and a timer that redraws the elapsed
+  /// time while the folder is being read.
+  DateTime? _scanStartedAt;
+  Timer? _elapsedTimer;
   FolderScanResult? _folderScan;
   FolderScanResult? _bestShotsScan;
   bool _loading = true;
@@ -216,12 +225,21 @@ class _LibraryPageState extends State<LibraryPage> {
       _folderImagesTotal = null;
       _folderImagesFound = 0;
       _folderFilesChecked = 0;
+      _scanStartedAt = DateTime.now();
       _freedBytes = 0;
       _freedPhotos = 0;
       if (bestShots) {
         _bestShotsError = null;
       } else {
         _folderScanError = null;
+      }
+    });
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || !_scanActive || _folderImagesTotal != null) {
+        timer.cancel();
+      } else {
+        setState(() {});
       }
     });
     try {
@@ -249,6 +267,12 @@ class _LibraryPageState extends State<LibraryPage> {
         },
         onTotal: (total) {
           _expectedFiles[selectedFolder.uri] = _folderFilesChecked;
+          final started = _scanStartedAt;
+          if (started != null) {
+            _listingSeconds[selectedFolder.uri] = DateTime.now()
+                .difference(started)
+                .inSeconds;
+          }
           if (mounted) setState(() => _folderImagesTotal = total);
         },
         onProgress: (count) {
@@ -1001,14 +1025,27 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget _scanProgressBar() {
     final total = _folderImagesTotal;
     final listed = total != null;
-    // With a previous listing of this folder the first step has a real
-    // percentage; otherwise the total is unknown until the listing ends.
-    final expected = _selectedFolder == null
+    // Android hands over a big folder's file list in one piece, so there is
+    // no true percentage for this step. With a previous listing of the same
+    // folder we estimate from its file count or how long it took.
+    final folderUri = _selectedFolder?.uri;
+    final expectedFiles = folderUri == null ? null : _expectedFiles[folderUri];
+    final expectedSeconds = folderUri == null
         ? null
-        : _expectedFiles[_selectedFolder!.uri];
-    final listingFraction = expected == null || expected == 0
-        ? null
-        : (_folderFilesChecked / expected).clamp(0.0, 0.99);
+        : _listingSeconds[folderUri];
+    final started = _scanStartedAt;
+    final elapsed = started == null
+        ? Duration.zero
+        : DateTime.now().difference(started);
+    double? listingFraction;
+    if (expectedFiles != null && expectedFiles > 0 && _folderFilesChecked > 0) {
+      listingFraction = _folderFilesChecked / expectedFiles;
+    } else if (expectedSeconds != null && expectedSeconds > 0) {
+      listingFraction = elapsed.inSeconds / expectedSeconds;
+    }
+    listingFraction = listingFraction?.clamp(0.0, 0.95);
+    final clock =
+        '${elapsed.inMinutes}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
     final fraction = total == null || total == 0
         ? (listed ? 1.0 : 0.0)
         : (_folderImagesScanned / total).clamp(0.0, 1.0);
@@ -1069,12 +1106,20 @@ class _LibraryPageState extends State<LibraryPage> {
             listed
                 ? '$total found'
                 : listingFraction == null
-                ? '$_folderImagesFound found · $_folderFilesChecked files checked'
-                : '${(listingFraction * 100).floor()}% · $_folderImagesFound found',
+                ? 'Reading folder · $clock'
+                : '~${(listingFraction * 100).floor()}% · $clock',
             listed ? 1.0 : listingFraction,
             active: !listed,
             done: listed,
           ),
+          if (!listed && listingFraction == null && elapsed.inSeconds >= 5)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                'Big folders are read in one go, so a percentage is not available on the first scan. The next scan of this folder will show one.',
+                style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+              ),
+            ),
           const SizedBox(height: 10),
           step(
             '2. Analyzing photos',
@@ -1141,6 +1186,7 @@ class _LibraryPageState extends State<LibraryPage> {
 
   @override
   void dispose() {
+    _elapsedTimer?.cancel();
     _folderScanner.dispose();
     _searchController.dispose();
     super.dispose();

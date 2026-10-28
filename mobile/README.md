@@ -76,3 +76,8 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+
+
+## Publishing
+
+See `docs/play-release-checklist.md` (signing, bundle, Play Console steps), `docs/privacy-policy.md` (draft to host publicly) and `docs/play-store-listing.md` (listing text and Data safety draft). Release signing reads `android/key.properties` (see `android/key.properties.example`).
