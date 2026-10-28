@@ -190,4 +190,37 @@ void main() {
       await scanner.dispose();
     }
   });
+
+  test('a custom date range keeps photos inside it and reports the total', () async {
+    final scanner = FolderDuplicateScanner(
+      saf: _MemorySaf(img.encodePng(img.Image(width: 30, height: 20))),
+    );
+    try {
+      int? total;
+      final inside = await scanner.scanUri(
+        'content://test',
+        folderName: 'test',
+        bestShotsScan: true,
+        dateRange: FolderDateRange.custom,
+        rangeFrom: DateTime(2023, 11, 10),
+        rangeTo: DateTime(2023, 11, 20),
+        onTotal: (value) => total = value,
+      );
+      expect(inside.imagesOutsideDateRange, 0);
+      expect(inside.imagesScanned + inside.imagesSkipped, 2);
+      expect(total, 2);
+
+      final outside = await scanner.scanUri(
+        'content://test',
+        folderName: 'test',
+        dateRange: FolderDateRange.custom,
+        rangeFrom: DateTime(2020, 1, 1),
+        rangeTo: DateTime(2020, 12, 31),
+      );
+      expect(outside.imagesScanned, 0);
+      expect(outside.imagesOutsideDateRange, 2);
+    } finally {
+      await scanner.dispose();
+    }
+  });
 }

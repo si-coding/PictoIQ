@@ -140,6 +140,7 @@ class FaceSignals {
     this.edgeCutoff = false,
     this.lookingAwayMax,
     this.subjectColors,
+    this.personColors,
   });
 
   static const none = FaceSignals(
@@ -168,6 +169,11 @@ class FaceSignals {
   /// Colours below the largest face (clothing), used only to keep photos of
   /// differently dressed people out of one group. Null when not measured.
   final List<double>? subjectColors;
+
+  /// Clothing colours of up to the four largest faces, largest first, so a
+  /// group can require the same people in the same clothes. Null when not
+  /// measured.
+  final List<List<double>>? personColors;
 }
 
 /// Everything the ranking needs to know about one photo.

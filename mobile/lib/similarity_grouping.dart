@@ -468,7 +468,7 @@ class SimilarityThresholds {
         mediumDistance: 14,
         mediumLayoutDistance: 0.09,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.18 : 1.0,
+        maxSubjectDistance: splitByPeople ? 0.12 : 1.0,
         histLinkDistance: 0.03,
         histLayoutDistance: 0.07,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
@@ -481,7 +481,7 @@ class SimilarityThresholds {
         highDistance: 4,
         mediumDistance: 20,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.25 : 1.0,
+        maxSubjectDistance: splitByPeople ? 0.18 : 1.0,
         histLinkDistance: 0.05,
         histLayoutDistance: 0.10,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
@@ -498,7 +498,7 @@ class SimilarityThresholds {
         mediumDistance: 26,
         mediumLayoutDistance: 0.16,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.40 : 1.0,
+        maxSubjectDistance: splitByPeople ? 0.32 : 1.0,
         histLinkDistance: 0.08,
         histLayoutDistance: 0.13,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
@@ -723,12 +723,20 @@ class SimilarityCandidate {
     this.faceCount,
     this.colorLayout,
     this.subjectColors,
+    this.personColors,
     this.isDocument = false,
     this.documentDetail,
   });
 
   /// Colours of the main person's clothing (see [regionHistogram]), or null.
   final List<double>? subjectColors;
+
+  /// Clothing colours of up to four faces (see [FaceSignals.personColors]).
+  final List<List<double>>? personColors;
+
+  /// Everyone's clothing, from [personColors] or the single [subjectColors].
+  List<List<double>>? get people =>
+      personColors ?? (subjectColors == null ? null : [subjectColors!]);
 
   /// True for document-like images; they only link to each other, strictly.
   final bool isDocument;
@@ -865,6 +873,56 @@ List<SimilarityCluster> clusterSimilar(
   ];
 }
 
+/// The colours of [region] (a person's clothing) that stand out from the
+/// [whole] picture, normalised to sum to one. Colours the whole scene shares,
+/// such as the rocks and trees behind two different people, cancel out. Null
+/// when almost nothing stands out, so the clothing is treated as unknown.
+List<double>? distinctiveColors(List<double> region, List<double> whole) {
+  final out = List<double>.filled(region.length, 0);
+  var total = 0.0;
+  for (var k = 0; k < region.length; k++) {
+    final extra = region[k] - (k < whole.length ? whole[k] : 0.0);
+    if (extra > 0) {
+      out[k] = extra;
+      total += extra;
+    }
+  }
+  if (total < 0.08) return null;
+  return [for (final value in out) value / total];
+}
+
+/// True when two photos cannot show the same people in the same clothes:
+/// someone in the photo with fewer people has no clothing match (within
+/// [limit]) among the people of the other. Extra people in one photo are
+/// fine (a stranger walking by); unknown clothing never conflicts.
+bool clothingConflict(
+  List<List<double>>? a,
+  List<List<double>>? b,
+  double limit,
+) {
+  if (a == null || b == null || a.isEmpty || b.isEmpty || limit >= 1.0) {
+    return false;
+  }
+  final fewer = a.length <= b.length ? a : b;
+  final more = a.length <= b.length ? b : a;
+  final used = <int>{};
+  for (final person in fewer) {
+    var best = -1;
+    var bestDistance = double.infinity;
+    for (var i = 0; i < more.length; i++) {
+      if (used.contains(i)) continue;
+      final distance = histogramDistance(person, more[i]);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    if (best < 0 || bestDistance > limit) return true;
+    used.add(best);
+  }
+  return false;
+}
+
 /// Content-only grouping (see [SimilarityThresholds.content]): every pair is
 /// compared, with no time window, so a copied-in photo can match one taken
 /// years earlier. Quadratic in the number of photos, which is fine for a
@@ -887,18 +945,22 @@ List<SimilarityCluster> _clusterByContent(
     return root;
   }
 
-  for (var i = 1; i < order.length; i++) {
+  // Whether two photos are directly alike (every guard and tier applies).
+  bool linkedPair(int i, int j) {
     final current = candidates[order[i]];
-    for (var j = 0; j < i; j++) {
-      if (find(i) == find(j)) continue;
       final earlier = candidates[order[j]];
       final earlierFaces = earlier.faceCount;
       final currentFaces = current.faceCount;
+      // The loosest tier (colours only) also wants the same number of people.
+      final sameFaces =
+          earlierFaces == null ||
+          currentFaces == null ||
+          earlierFaces == currentFaces;
       if (earlierFaces != null &&
           currentFaces != null &&
           (earlierFaces - currentFaces).abs() >=
               thresholds.maxFaceCountDifference) {
-        continue;
+        return false;
       }
       final distance = hammingDistance(earlier.visualHash, current.visualHash);
       if (earlier.isDocument || current.isDocument) {
@@ -913,16 +975,9 @@ List<SimilarityCluster> _clusterByContent(
             distance <= thresholds.documentHashDistance &&
             layoutDistance(detailA, detailB) <=
                 thresholds.documentDetailDistance) {
-          parent[find(i)] = find(j);
+          return true;
         }
-        continue;
-      }
-      final subjectA = earlier.subjectColors;
-      final subjectB = current.subjectColors;
-      if (subjectA != null &&
-          subjectB != null &&
-          histogramDistance(subjectA, subjectB) > thresholds.maxSubjectDistance) {
-        continue;
+        return false;
       }
       // A trustworthy camera time (never a file date) can confirm a match
       // that the pictures alone only suggest, however the structure changed.
@@ -936,7 +991,16 @@ List<SimilarityCluster> _clusterByContent(
         thresholds.shiftHashDistance,
         thresholds.histLinkDistance > 0 ? thresholds.histHashDistance : 0,
       );
-      if (distance > hashGate && !trusted) continue;
+      if (distance > hashGate && !trusted) return false;
+      // Same people in the same clothes: everyone in the photo with fewer
+      // people must have a match in the other one.
+      if (clothingConflict(
+        earlier.people,
+        current.people,
+        thresholds.maxSubjectDistance,
+      )) {
+        return false;
+      }
       final a = earlier.colorLayout;
       final b = current.colorLayout;
       var linked = false;
@@ -958,6 +1022,7 @@ List<SimilarityCluster> _clusterByContent(
             histA != null &&
             histB != null &&
             distance <= thresholds.histHashDistance &&
+            sameFaces &&
             layout <= thresholds.histLayoutDistance &&
             histogramDistance(histA, histB) <= thresholds.histLinkDistance) {
           linked = true;
@@ -975,7 +1040,18 @@ List<SimilarityCluster> _clusterByContent(
                 thresholds.trustedColorDistance &&
             layoutDistance(a, b) <= thresholds.trustedLayoutDistance;
       }
-      if (linked) parent[find(i)] = find(j);
+      return linked;
+  }
+
+  // Direct links are kept, not just their union, so a long chain of
+  // look-alikes can be split afterwards.
+  final links = List<Set<int>>.generate(order.length, (_) => <int>{});
+  for (var i = 1; i < order.length; i++) {
+    for (var j = 0; j < i; j++) {
+      if (!linkedPair(i, j)) continue;
+      links[i].add(j);
+      links[j].add(i);
+      parent[find(i)] = find(j);
     }
   }
 
@@ -984,15 +1060,51 @@ List<SimilarityCluster> _clusterByContent(
     positions.putIfAbsent(find(i), () => []).add(i);
   }
   return [
-    for (final group in positions.values)
-      if (group.length > 1)
-        SimilarityCluster(
-          members: [for (final position in group) order[position]],
-          evidence: _contentEvidenceFor([
-            for (final position in group) candidates[order[position]],
-          ], thresholds),
-        ),
+    for (final component in positions.values)
+      for (final group in _splitLooseChain(component, links))
+        if (group.length > 1)
+          SimilarityCluster(
+            members: [for (final position in group) order[position]],
+            evidence: _contentEvidenceFor([
+              for (final position in group) candidates[order[position]],
+            ], thresholds),
+          ),
   ];
+}
+
+/// Single links can chain a whole beach day together: A looks like B, B like
+/// C, and so on, though A and Z share only the place. A photo stays in a
+/// group only when it is directly alike at least half of the photos already
+/// in it, so a group is a set of mutually similar shots (same people, same
+/// pose, same spot) rather than a chain.
+List<List<int>> _splitLooseChain(List<int> component, List<Set<int>> links) {
+  if (component.length < 4) return [component];
+  final remaining = [...component]
+    ..sort((a, b) {
+      final byDegree = links[b].length.compareTo(links[a].length);
+      return byDegree != 0 ? byDegree : a.compareTo(b);
+    });
+  final groups = <List<int>>[];
+  while (remaining.isNotEmpty) {
+    final group = <int>[remaining.removeAt(0)];
+    while (true) {
+      int? best;
+      var bestShare = 0.0;
+      for (final candidate in remaining) {
+        final shared = group.where(links[candidate].contains).length;
+        final share = shared / group.length;
+        if (share >= 0.5 && share > bestShare) {
+          best = candidate;
+          bestShare = share;
+        }
+      }
+      if (best == null) break;
+      group.add(best);
+      remaining.remove(best);
+    }
+    groups.add(group..sort());
+  }
+  return groups;
 }
 
 SimilarityEvidence _contentEvidenceFor(

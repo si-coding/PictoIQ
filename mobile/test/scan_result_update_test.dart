@@ -111,4 +111,15 @@ void main() {
     final other = result.withoutFromGroup('another-group', 'content://test/a');
     expect(other.duplicateGroups.single.photos.length, 3);
   });
+
+  test('a whole group can be set aside without deleting anything', () {
+    final first = rankedGroup([_photo('a'), _photo('b')], _evidence);
+    final second = rankedGroup([_photo('c'), _photo('d')], _evidence);
+    final result = _result([first, second], best: true);
+
+    final after = result.withoutGroup(first.id);
+    expect(after.duplicateGroups.map((g) => g.id), [second.id]);
+    expect(after.imagesScanned, result.imagesScanned);
+    expect(result.duplicateGroups, hasLength(2));
+  });
 }

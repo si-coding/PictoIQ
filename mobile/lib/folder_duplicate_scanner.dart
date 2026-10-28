@@ -166,7 +166,8 @@ enum FolderDateRange {
   today('Today'),
   week('Last 7 days'),
   month('Last 30 days'),
-  currentFolder('Current folder');
+  currentFolder('Current folder'),
+  custom('Custom range');
 
   const FolderDateRange(this.label);
 
@@ -357,6 +358,26 @@ class FolderScanResult {
     );
   }
 
+  /// This result with the whole group [groupId] set aside (skipped). Nothing
+  /// is deleted; the group just stops being offered.
+  FolderScanResult withoutGroup(String groupId) => FolderScanResult(
+    folderUri: folderUri,
+    folderName: folderName,
+    imagesScanned: imagesScanned,
+    duplicateGroups: List.unmodifiable([
+      for (final group in duplicateGroups)
+        if (group.id != groupId) group,
+    ]),
+    bestShotsScan: bestShotsScan,
+    dateRange: dateRange,
+    imagesSkipped: imagesSkipped,
+    imageFilesFound: imageFilesFound,
+    imagesOutsideDateRange: imagesOutsideDateRange,
+    scannedPhotos: scannedPhotos,
+    skippedNames: skippedNames,
+    documentsLeftOut: documentsLeftOut,
+  );
+
   int get duplicateFileCount =>
       duplicateGroups.fold(0, (count, group) => count + group.photos.length);
 
@@ -375,6 +396,31 @@ class ScanCancelled implements Exception {
   @override
   String toString() => 'Scan cancelled';
 }
+
+Future<Uint8List?> _largePreviewInIsolate(Uint8List bytes) => Isolate.run(() {
+  final decoded = decodeAnalysisImage(bytes, edge: 2048);
+  return decoded == null
+      ? null
+      : encodePreview(decoded, edge: 2048, quality: 90);
+});
+
+/// Runs [_analyzeShot] in a background isolate. A top-level function keeps
+/// the closure's captured state to just these arguments; a closure built
+/// inside the scan loop would drag the scan's callbacks and results into the
+/// message, which an isolate cannot receive.
+Future<_ShotAnalysis?> _analyzeInIsolate(
+  Uint8List bytes,
+  int modifiedAt,
+  String name,
+  bool useFaceSignals,
+) => Isolate.run(
+  () => FolderDuplicateScanner._analyzeShot(
+    bytes,
+    modifiedAt,
+    name,
+    useFaceSignals,
+  ),
+);
 
 class FolderDuplicateScanner {
   FolderDuplicateScanner({
@@ -464,6 +510,11 @@ class FolderDuplicateScanner {
     SimilarityThresholds? thresholds,
     DocumentMode documentMode = DocumentMode.leaveOut,
     FolderDateRange dateRange = FolderDateRange.currentFolder,
+    DateTime? rangeFrom,
+    DateTime? rangeTo,
+    int concurrency = 3,
+    void Function(int found, int checked)? onListed,
+    void Function(int total)? onTotal,
     void Function(int imagesScanned)? onProgress,
     bool Function()? shouldCancel,
   }) async {
@@ -475,15 +526,49 @@ class FolderDuplicateScanner {
     final skippedNames = <String>[];
     Object? firstError;
     final now = DateTime.now();
-    final dateThreshold = switch (dateRange) {
-      FolderDateRange.today => DateTime(now.year, now.month, now.day),
-      FolderDateRange.week => now.subtract(const Duration(days: 7)),
-      FolderDateRange.month => now.subtract(const Duration(days: 30)),
-      FolderDateRange.currentFolder => null,
-    };
+    // Photos modified before [lower] or from [upper] on are left out.
+    final DateTime? lower;
+    final DateTime? upper;
+    switch (dateRange) {
+      case FolderDateRange.today:
+        lower = DateTime(now.year, now.month, now.day);
+        upper = null;
+      case FolderDateRange.week:
+        lower = now.subtract(const Duration(days: 7));
+        upper = null;
+      case FolderDateRange.month:
+        lower = now.subtract(const Duration(days: 30));
+        upper = null;
+      case FolderDateRange.custom:
+        lower = rangeFrom == null
+            ? null
+            : DateTime(rangeFrom.year, rangeFrom.month, rangeFrom.day);
+        // The end day is included, so the limit is the start of the next day.
+        upper = rangeTo == null
+            ? null
+            : DateTime(rangeTo.year, rangeTo.month, rangeTo.day + 1);
+      case FolderDateRange.currentFolder:
+        lower = null;
+        upper = null;
+    }
 
+    // List the folder first (cheap), so the total is known and the slow part,
+    // reading and analysing each photo, can run several at a time.
+    final pending =
+        <({
+          String uri,
+          String name,
+          String relativePath,
+          int length,
+          int lastModified,
+        })>[];
+    var checked = 0;
     await for (final entry in _saf.walk(folderUri)) {
       if (shouldCancel?.call() ?? false) throw const ScanCancelled();
+      checked += 1;
+      // Report every file looked at (not just photos), so a folder full of
+      // other files or out-of-range photos still shows movement.
+      if (checked % 40 == 0) onListed?.call(pending.length, checked);
       final file = entry.file;
       if (file.isDir ||
           _isSystemThumbnail(entry.relativePath) ||
@@ -491,14 +576,39 @@ class FolderDuplicateScanner {
         continue;
       }
       imageFilesFound += 1;
-      if (dateThreshold != null &&
-          (file.lastModified <= 0 ||
-              DateTime.fromMillisecondsSinceEpoch(file.lastModified)
-                  .isBefore(dateThreshold))) {
-        imagesOutsideDateRange += 1;
-        continue;
+      if (lower != null || upper != null) {
+        final modified = file.lastModified <= 0
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(file.lastModified);
+        if (modified == null ||
+            (lower != null && modified.isBefore(lower)) ||
+            (upper != null && !modified.isBefore(upper))) {
+          imagesOutsideDateRange += 1;
+          continue;
+        }
       }
+      pending.add((
+        uri: file.uri,
+        name: file.name,
+        relativePath: entry.relativePath,
+        length: file.length,
+        lastModified: file.lastModified,
+      ));
+    }
+    onListed?.call(pending.length, checked);
+    onTotal?.call(pending.length);
 
+    Future<void> processOne(
+      ({
+        String uri,
+        String name,
+        String relativePath,
+        int length,
+        int lastModified,
+      })
+      file,
+    ) async {
+      final entry = file;
       try {
         String? digest;
         _ShotAnalysis? analysis;
@@ -506,9 +616,11 @@ class FolderDuplicateScanner {
           final bytes = await collectImageBytes(
             await _saf.readFileStream(file.uri),
           );
-          final modifiedAt = file.lastModified;
-          analysis = await Isolate.run(
-            () => _analyzeShot(bytes, modifiedAt, file.name, useFaceSignals),
+          analysis = await _analyzeInIsolate(
+            bytes,
+            file.lastModified,
+            file.name,
+            useFaceSignals,
           );
         } else {
           digest = (await sha256.bind(await _saf.readFileStream(file.uri)).first)
@@ -521,7 +633,7 @@ class FolderDuplicateScanner {
           imagesSkipped += 1;
           skippedNames.add(entry.relativePath);
           onProgress?.call(imagesScanned + imagesSkipped);
-          continue;
+          return;
         }
         final visualHash = analysis?.visualHash ?? 0;
         final (capturedAt, captureSource) = analysis == null
@@ -575,6 +687,23 @@ class FolderDuplicateScanner {
         onProgress?.call(imagesScanned + imagesSkipped);
       }
     }
+
+    var nextIndex = 0;
+    Future<void> worker() async {
+      while (true) {
+        if (shouldCancel?.call() ?? false) throw const ScanCancelled();
+        final index = nextIndex++;
+        if (index >= pending.length) return;
+        await processOne(pending[index]);
+      }
+    }
+
+    await Future.wait([
+      for (var i = 0; i < math.max(1, concurrency); i++) worker(),
+    ]);
+    // Workers finish in any order; keep results stable.
+    images.sort((a, b) => a.relativePath.compareTo(b.relativePath));
+    skippedNames.sort();
 
     // If nothing could be read because of errors (for example the folder
     // permission was revoked), surface the failure instead of an empty result.
@@ -673,6 +802,18 @@ class FolderDuplicateScanner {
     }
   }
 
+  /// A sharper picture for the full-screen viewer: the original decoded down
+  /// to about 2048 px on its longest side. Null when it cannot be read.
+  Future<Uint8List?> loadLargePreview(String uri) async {
+    try {
+      final bytes = await collectImageBytes(await _saf.readFileStream(uri));
+      return await _largePreviewInIsolate(bytes);
+    } catch (error) {
+      debugPrint('Large preview unavailable: ${error.runtimeType}');
+      return null;
+    }
+  }
+
   Future<void> dispose() => _faceDetector.close();
 
   /// Runs face detection on one analysis image. Returns null when detection
@@ -727,28 +868,39 @@ class FolderDuplicateScanner {
           smileCount++;
         }
       }
-      // Colours below the largest face, a rough way to tell differently
-      // dressed people apart. Starts under the chin to skip skin.
-      final main = faces.reduce(
-        (a, b) =>
-            a.boundingBox.width * a.boundingBox.height >=
-                b.boundingBox.width * b.boundingBox.height
-            ? a
-            : b,
-      );
-      final mainBox = main.boundingBox;
-      final subjectColors = regionHistogram(
-        rgba,
-        width,
-        height,
-        (mainBox.center.dx - mainBox.width * 0.8).round(),
-        mainBox.bottom.round(),
-        (mainBox.center.dx + mainBox.width * 0.8).round(),
-        (mainBox.bottom + mainBox.height * 2.5).round(),
-      );
+      // Colours below each of the four largest faces, a rough way to tell
+      // differently dressed people apart. Starts under the chin to skip skin.
+      // Colours that also fill the rest of the picture (rocks, grass, sky) are
+      // subtracted, so the same place cannot make two outfits look alike.
+      final bySize = [...faces]
+        ..sort(
+          (a, b) => (b.boundingBox.width * b.boundingBox.height).compareTo(
+            a.boundingBox.width * a.boundingBox.height,
+          ),
+        );
+      final whole = regionHistogram(rgba, width, height, 0, 0, width, height);
+      final personColors = <List<double>>[];
+      for (final face in bySize.take(4)) {
+        final box = face.boundingBox;
+        final colors = regionHistogram(
+          rgba,
+          width,
+          height,
+          (box.center.dx - box.width * 0.6).round(),
+          box.bottom.round(),
+          (box.center.dx + box.width * 0.6).round(),
+          (box.bottom + box.height * 1.6).round(),
+        );
+        if (colors == null) continue;
+        final outfit = whole == null
+            ? colors
+            : distinctiveColors(colors, whole);
+        if (outfit != null) personColors.add(outfit);
+      }
       return FaceSignals(
         count: faces.length,
-        subjectColors: subjectColors,
+        subjectColors: personColors.isEmpty ? null : personColors.first,
+        personColors: personColors.isEmpty ? null : personColors,
         eyesOpenMin: eyesOpenMin,
         smileAverage: smileCount == 0 ? null : smileTotal / smileCount,
         edgeCutoff: edgeCutoff,
@@ -826,6 +978,7 @@ class FolderDuplicateScanner {
             colorLayout: photo.colorLayout,
             faceCount: photo.features?.faces?.count,
             subjectColors: photo.features?.faces?.subjectColors,
+            personColors: photo.features?.faces?.personColors,
             isDocument: photo.isDocumentLike,
             documentDetail: photo.documentDetail,
           ),

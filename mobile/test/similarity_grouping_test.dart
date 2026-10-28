@@ -610,6 +610,62 @@ void main() {
       expect(clusters.single.evidence.confidence, SimilarityConfidence.low);
     });
 
+    test('a long chain of look-alikes is split, not kept as one group', () {
+      // Neighbours are 12 bits apart (linked by the shifted-framing rule);
+      // photos two apart are 24 bits apart, beyond every limit.
+      final chain = [
+        for (var i = 0; i < 5; i++)
+          photo(String.fromCharCode(97 + i), _bits(i * 12), layout(0.5)),
+      ];
+      final clusters = clusterSimilar(
+        chain,
+        thresholds: SimilarityThresholds.content,
+      );
+      expect(clusters, isNotEmpty);
+      for (final cluster in clusters) {
+        expect(cluster.members.length, lessThanOrEqualTo(3));
+        expect(
+          cluster.members.contains(0) && cluster.members.contains(4),
+          isFalse,
+        );
+      }
+    });
+
+    test('colour-only matches need the same number of people', () {
+      List<double> bin(int index) => [
+        for (var k = 0; k < colorHistogramBins; k++) k == index ? 1.0 : 0.0,
+      ];
+      SimilarityCandidate moved(String name, int hash, int faces) =>
+          SimilarityCandidate(
+            visualHash: hash,
+            capturedAt: 0,
+            captureSource: CaptureSource.modified,
+            tieBreaker: name,
+            colorLayout: layout(0.5),
+            colorHistogram: bin(48),
+            faceCount: faces,
+          );
+      final thresholds = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.off,
+      );
+      // Structure moved a lot (hash 28 apart): only the colour tier applies.
+      expect(
+        clusterSimilar([
+          moved('a', 0, 1),
+          moved('b', _bits(28), 2),
+        ], thresholds: thresholds),
+        isEmpty,
+      );
+      expect(
+        clusterSimilar([
+          moved('a', 0, 2),
+          moved('b', _bits(28), 2),
+        ], thresholds: thresholds),
+        hasLength(1),
+      );
+    });
+
     test('the evidence says time was not used', () {
       final shots = [photo('a', 0, layout(0.5)), photo('b', 0, layout(0.5))];
       final evidence = clusterSimilar(
@@ -741,6 +797,78 @@ void main() {
         ),
         hasLength(1),
       );
+    });
+
+    SimilarityCandidate crowd(String name, List<List<double>> people) =>
+        SimilarityCandidate(
+          visualHash: 0,
+          capturedAt: 0,
+          captureSource: CaptureSource.unknown,
+          tieBreaker: name,
+          colorLayout: flat(108, 0.5),
+          personColors: people,
+        );
+
+    test('everyone must keep the same clothes, not just the main person', () {
+      final thresholds = SimilarityThresholds.forLevel(MatchLevel.balanced);
+      // Same two people, same clothes (order does not matter).
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48), bin(10)]),
+          crowd('b', [bin(10), bin(48)]),
+        ], thresholds: thresholds),
+        hasLength(1),
+      );
+      // The main person matches but the second person changed clothes.
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48), bin(10)]),
+          crowd('b', [bin(48), bin(1)]),
+        ], thresholds: thresholds),
+        isEmpty,
+      );
+    });
+
+    test('a stranger in the background does not split a group', () {
+      final thresholds = SimilarityThresholds.forLevel(MatchLevel.balanced);
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48)]),
+          crowd('b', [bin(48), bin(1)]),
+        ], thresholds: thresholds),
+        hasLength(1),
+      );
+    });
+
+    test('clothingConflict ignores unknown clothing and a switched-off check', () {
+      expect(clothingConflict(null, [bin(1)], 0.18), isFalse);
+      expect(clothingConflict([bin(48)], [bin(1)], 1.0), isFalse);
+      expect(clothingConflict([bin(48)], [bin(1)], 0.18), isTrue);
+    });
+
+    test('shared background colours cancel out of a person\'s clothing', () {
+      List<double> mix(Map<int, double> parts) => [
+        for (var k = 0; k < colorHistogramBins; k++) parts[k] ?? 0.0,
+      ];
+      // Half the box is shirt (bin 48), half is rock (bin 10); the whole
+      // picture is mostly rock, so only the shirt stands out.
+      final outfit = distinctiveColors(
+        mix({48: 0.5, 10: 0.5}),
+        mix({48: 0.1, 10: 0.9}),
+      )!;
+      expect(outfit[48], closeTo(1.0, 1e-9));
+      expect(outfit[10], 0.0);
+      // A box that looks like the whole picture says nothing about clothes.
+      expect(
+        distinctiveColors(mix({10: 1.0}), mix({10: 1.0})),
+        isNull,
+      );
+      // Two people in front of the same rocks: different shirts stay apart.
+      final yellow = distinctiveColors(
+        mix({20: 0.5, 10: 0.5}),
+        mix({20: 0.1, 10: 0.9}),
+      )!;
+      expect(histogramDistance(outfit, yellow), greaterThan(0.9));
     });
 
     test('missing subject colours do not block grouping', () {

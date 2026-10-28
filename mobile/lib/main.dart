@@ -10,6 +10,7 @@ import 'library_store.dart';
 import 'photo_asset.dart';
 import 'scanned_files_page.dart';
 import 'selection_policy.dart';
+import 'shot_ranking.dart' show RankedShot;
 import 'similarity_grouping.dart';
 
 const _ink = Color(0xFF282B25);
@@ -40,8 +41,6 @@ class PictoIqApp extends StatelessWidget {
   );
 }
 
-enum _ReviewFilter { all, ready, review }
-
 class LibraryPage extends StatefulWidget {
   const LibraryPage({super.key});
 
@@ -56,10 +55,28 @@ class _LibraryPageState extends State<LibraryPage> {
   final _searchController = TextEditingController();
   final _folderSelectionKey = GlobalKey();
   final Map<String, int> _photoRatings = {};
+
+  /// Space and photos freed by deletions since the last scan started.
+  int _freedBytes = 0;
+  int _freedPhotos = 0;
   AppSettings _settings = const AppSettings();
   List<PhotoAsset> _photos = [];
   FolderSelection? _selectedFolder;
   FolderDateRange _folderDateRange = FolderDateRange.currentFolder;
+
+  /// The from and to dates picked for [FolderDateRange.custom].
+  DateTimeRange? _customRange;
+
+  /// Photos the running scan will analyse (known once the folder is listed).
+  int? _folderImagesTotal;
+
+  /// Photos found, and files looked at, so far while the folder is listed.
+  int _folderImagesFound = 0;
+  int _folderFilesChecked = 0;
+
+  /// How many files each folder had last time it was listed, so a rescan can
+  /// show a real percentage for the listing step.
+  final Map<String, int> _expectedFiles = {};
   FolderScanResult? _folderScan;
   FolderScanResult? _bestShotsScan;
   bool _loading = true;
@@ -68,12 +85,11 @@ class _LibraryPageState extends State<LibraryPage> {
   bool _scanningBestShots = false;
   bool _duplicatesOnly = false;
   _PhotoSort _sort = _PhotoSort.recent;
-  int _tab = 0;
+  final int _tab = 0;
   bool _setupExpanded = true;
   bool _showBestResults = true;
   bool _scanActive = false;
   bool _cancelRequested = false;
-  _ReviewFilter _reviewFilter = _ReviewFilter.all;
   int _folderImagesScanned = 0;
   String? _error;
   String? _folderScanError;
@@ -197,6 +213,11 @@ class _LibraryPageState extends State<LibraryPage> {
       _cancelRequested = false;
       _showBestResults = bestShots;
       _folderImagesScanned = 0;
+      _folderImagesTotal = null;
+      _folderImagesFound = 0;
+      _folderFilesChecked = 0;
+      _freedBytes = 0;
+      _freedPhotos = 0;
       if (bestShots) {
         _bestShotsError = null;
       } else {
@@ -216,6 +237,20 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
         documentMode: _settings.documentMode,
         dateRange: _folderDateRange,
+        rangeFrom: _customRange?.start,
+        rangeTo: _customRange?.end,
+        onListed: (found, checked) {
+          if (mounted) {
+            setState(() {
+              _folderImagesFound = found;
+              _folderFilesChecked = checked;
+            });
+          }
+        },
+        onTotal: (total) {
+          _expectedFiles[selectedFolder.uri] = _folderFilesChecked;
+          if (mounted) setState(() => _folderImagesTotal = total);
+        },
         onProgress: (count) {
           if (mounted) setState(() => _folderImagesScanned = count);
         },
@@ -224,7 +259,6 @@ class _LibraryPageState extends State<LibraryPage> {
       if (!mounted) return;
       setState(() {
         _setupExpanded = false;
-        _reviewFilter = _ReviewFilter.all;
         if (bestShots) {
           _bestShotsScan = result;
         } else {
@@ -367,6 +401,31 @@ class _LibraryPageState extends State<LibraryPage> {
       scan.duplicateGroups.length -
       _bulkGroups(scan, bestShots: bestShots).length;
 
+  /// Photos that would go if every group kept only one photo: the user's
+  /// pick when there is one, otherwise the top pick (or oldest exact copy).
+  /// Unlike [_scanRemovals] it includes groups that need review.
+  List<FolderScanPhoto> _potentialRemovals(
+    FolderScanResult scan, {
+    required bool bestShots,
+  }) => [
+    for (final group in scan.duplicateGroups)
+      ..._withoutKeeper(group, bestShots: bestShots),
+  ];
+
+  List<FolderScanPhoto> _withoutKeeper(
+    FolderDuplicateGroup group, {
+    required bool bestShots,
+  }) {
+    final decision = _decisionFor(group, bestShots: bestShots);
+    final keep = decision.hasDecision
+        ? decision.keepIds
+        : {bestShots ? group.recommended.uri : group.oldestFirst.first.uri};
+    return [
+      for (final photo in group.photos)
+        if (!keep.contains(photo.uri)) photo,
+    ];
+  }
+
   List<FolderScanPhoto> _scanRemovals(
     FolderScanResult scan, {
     required bool bestShots,
@@ -382,6 +441,26 @@ class _LibraryPageState extends State<LibraryPage> {
     group,
     bestShots: bestShots,
   ).fold(0, (total, photo) => total + photo.size);
+
+  /// One round button per photo: filled for the photo that will be kept.
+  /// Choosing another photo replaces the choice, so a group keeps one photo.
+  Widget _keepSelector(
+    FolderDuplicateGroup group,
+    FolderScanPhoto photo,
+    Set<String> keepIds,
+  ) {
+    final selected = keepIds.contains(photo.uri);
+    return IconButton(
+      tooltip: selected ? 'This photo will be kept' : 'Keep this photo',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      onPressed: selected ? null : () => _chooseKeeper(group, photo.uri),
+      icon: Icon(
+        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        color: selected ? _green : const Color(0xFF77796F),
+      ),
+    );
+  }
 
   Widget _photoRatingButtons(String key) => Row(
     mainAxisSize: MainAxisSize.min,
@@ -487,6 +566,8 @@ class _LibraryPageState extends State<LibraryPage> {
     }
     if (mounted) {
       setState(() {
+        _freedBytes += freedBytes;
+        _freedPhotos += deleted.length;
         _folderScan = scan.withoutPhotos(deleted);
         _scanningFolder = false;
         _scanningBestShots = false;
@@ -504,7 +585,7 @@ class _LibraryPageState extends State<LibraryPage> {
     if (scan == null) return;
     final decision = _decisionFor(group, bestShots: true);
     if (!decision.hasDecision) {
-      _showMessage('Give a thumbs-up to the photo you want to keep first.');
+      _showMessage('Choose the photo you want to keep first.');
       return;
     }
     final keepers = _groupKeepers(group, bestShots: true);
@@ -617,6 +698,8 @@ class _LibraryPageState extends State<LibraryPage> {
     }
     if (mounted) {
       setState(() {
+        _freedBytes += freedBytes;
+        _freedPhotos += deleted.length;
         _bestShotsScan = scan.withoutPhotos(deleted);
         _scanningFolder = false;
         _scanningBestShots = false;
@@ -629,19 +712,132 @@ class _LibraryPageState extends State<LibraryPage> {
     }
   }
 
-  Future<void> _deleteAllScanRemovables({required bool bestShots}) async {
+  /// "Trust PictoIQ": choose how far automatic cleanup may go, then reuse the
+  /// normal confirmation that lists the files before anything is deleted.
+  Future<void> _showAutoClean(FolderScanResult scan) async {
+    final confident = _scanRemovals(scan, bestShots: true);
+    final everything = _potentialRemovals(scan, bestShots: true);
+    final confidentBytes = confident.fold<int>(0, (t, p) => t + p.size);
+    final everythingBytes = everything.fold<int>(0, (t, p) => t + p.size);
+    final canDoAll = !_settings.manualSelectionOnly && everything.isNotEmpty;
+    var scope = confident.isNotEmpty ? 0 : 1;
+    var acknowledged = false;
+    final choice = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final allSelected = scope == 1;
+          final canContinue =
+              (scope == 0 && confident.isNotEmpty) ||
+              (allSelected && canDoAll && acknowledged);
+          return AlertDialog(
+            title: const Text('Let PictoIQ clean up'),
+            content: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    'PictoIQ keeps your picks, or its top pick in each group, and deletes the rest. You will see the list before anything is deleted.',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    enabled: confident.isNotEmpty,
+                    leading: Icon(
+                      scope == 0
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    onTap: confident.isEmpty
+                        ? null
+                        : () => setDialogState(() => scope = 0),
+                    title: const Text('Confident groups only'),
+                    subtitle: Text(
+                      confident.isEmpty
+                          ? 'No group is clear enough yet.'
+                          : '${confident.length} photos · ${_formatBytes(confidentBytes)}. Safest; groups needing a look are left alone.',
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    enabled: canDoAll,
+                    leading: Icon(
+                      scope == 1
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_unchecked,
+                    ),
+                    onTap: canDoAll
+                        ? () => setDialogState(() => scope = 1)
+                        : null,
+                    title: const Text('Every group'),
+                    subtitle: Text(
+                      _settings.manualSelectionOnly
+                          ? 'Unavailable while "choose myself" is on.'
+                          : '${everything.length} photos · ${_formatBytes(everythingBytes)}. Includes groups PictoIQ is unsure about.',
+                    ),
+                  ),
+                  if (allSelected && canDoAll)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: acknowledged,
+                      onChanged: (value) =>
+                          setDialogState(() => acknowledged = value ?? false),
+                      title: const Text(
+                        'I understand some top picks may be wrong.',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: canContinue
+                    ? () => Navigator.pop(dialogContext, scope)
+                    : null,
+                child: const Text('Continue'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await _deleteAllScanRemovables(
+      bestShots: true,
+      includeUncertain: choice == 1,
+    );
+  }
+
+  Future<void> _deleteAllScanRemovables({
+    required bool bestShots,
+    bool includeUncertain = false,
+  }) async {
     final scan = bestShots ? _bestShotsScan : _folderScan;
     if (scan == null || _scanningFolder) return;
-    final remove = _scanRemovals(scan, bestShots: bestShots);
+    final remove = includeUncertain
+        ? _potentialRemovals(scan, bestShots: bestShots)
+        : _scanRemovals(scan, bestShots: bestShots);
     if (remove.isEmpty) return;
     final bytes = remove.fold<int>(0, (total, photo) => total + photo.size);
     final category = bestShots
         ? 'lower-ranked similar shots'
         : 'exact duplicate copies';
     final keepDescription = bestShots
-        ? 'PictoIQ will keep your thumbs-up picks, or the top-ranked photo in each group where the match and the ranking are both clear.'
-        : 'PictoIQ will keep your thumbs-up picks, or the oldest copy in each group.';
-    final skippedGroups = _groupsNeedingReview(scan, bestShots: bestShots);
+        ? (includeUncertain
+              ? 'PictoIQ will keep your picks, or its top-ranked photo in every group, including groups it is unsure about.'
+              : 'PictoIQ will keep your picks, or the top-ranked photo in each group where the match and the ranking are both clear.')
+        : 'PictoIQ will keep your picks, or the oldest copy in each group.';
+    final skippedGroups = includeUncertain
+        ? 0
+        : _groupsNeedingReview(scan, bestShots: bestShots);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -724,6 +920,8 @@ class _LibraryPageState extends State<LibraryPage> {
     }
     if (mounted) {
       setState(() {
+        _freedBytes += freedBytes;
+        _freedPhotos += deleted.length;
         if (bestShots) {
           _bestShotsScan = scan.withoutPhotos(deleted);
         } else {
@@ -769,6 +967,133 @@ class _LibraryPageState extends State<LibraryPage> {
     } catch (error) {
       if (mounted) _showMessage('PictoIQ could not remove that library entry.');
     }
+  }
+
+  /// Chooses the photo date range; "Custom range" asks for the from and to
+  /// dates first and is only selected once both are picked.
+  Future<void> _selectDateRange(FolderDateRange range) async {
+    var customRange = _customRange;
+    if (range == FolderDateRange.custom) {
+      final now = DateTime.now();
+      final picked = await showDateRangePicker(
+        context: context,
+        firstDate: DateTime(2000),
+        lastDate: now,
+        initialDateRange: customRange,
+        helpText: 'Scan photos from … to …',
+        saveText: 'Use range',
+      );
+      if (picked == null || !mounted) return;
+      customRange = picked;
+    }
+    setState(() {
+      _folderDateRange = range;
+      _customRange = customRange;
+      _folderScan = null;
+      _bestShotsScan = null;
+      _folderScanError = null;
+      _bestShotsError = null;
+    });
+  }
+
+  /// Two bars: step 1 finds the photos (slides until the folder is listed,
+  /// then full), step 2 analyses them from 0 to 100 %.
+  Widget _scanProgressBar() {
+    final total = _folderImagesTotal;
+    final listed = total != null;
+    // With a previous listing of this folder the first step has a real
+    // percentage; otherwise the total is unknown until the listing ends.
+    final expected = _selectedFolder == null
+        ? null
+        : _expectedFiles[_selectedFolder!.uri];
+    final listingFraction = expected == null || expected == 0
+        ? null
+        : (_folderFilesChecked / expected).clamp(0.0, 0.99);
+    final fraction = total == null || total == 0
+        ? (listed ? 1.0 : 0.0)
+        : (_folderImagesScanned / total).clamp(0.0, 1.0);
+    Widget step(
+      String title,
+      String detail,
+      double? value, {
+      required bool active,
+      required bool done,
+    }) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(
+              done ? Icons.check_circle : Icons.radio_button_unchecked,
+              size: 16,
+              color: done || active ? _green : const Color(0xFFB4B7AC),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: active || done
+                      ? const Color(0xFF3B4234)
+                      : const Color(0xFF8A8D83),
+                ),
+              ),
+            ),
+            Text(
+              detail,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: value,
+            minHeight: 8,
+            color: _green,
+            backgroundColor: const Color(0xFFDDE8DC),
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          step(
+            '1. Finding photos',
+            listed
+                ? '$total found'
+                : listingFraction == null
+                ? '$_folderImagesFound found · $_folderFilesChecked files checked'
+                : '${(listingFraction * 100).floor()}% · $_folderImagesFound found',
+            listed ? 1.0 : listingFraction,
+            active: !listed,
+            done: listed,
+          ),
+          const SizedBox(height: 10),
+          step(
+            '2. Analyzing photos',
+            listed
+                ? '${(fraction * 100).floor()}% · $_folderImagesScanned of $total'
+                : 'waiting',
+            fraction,
+            active: listed,
+            done: listed && fraction >= 1.0,
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _progressLabel(String verb) {
+    final total = _folderImagesTotal;
+    if (total == null) return 'Finding photos…';
+    return '$verb $_folderImagesScanned of $total photos…';
   }
 
   void _showMessage(String message) {
@@ -823,23 +1148,9 @@ class _LibraryPageState extends State<LibraryPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    // The Library tab is hidden for now: no bottom bar, so `_tab` stays 0.
+    // Restore a NavigationBar here to bring it back.
     body: SafeArea(child: _tab == 0 ? _scanTab() : _libraryTab()),
-    bottomNavigationBar: NavigationBar(
-      selectedIndex: _tab,
-      onDestinationSelected: (index) => setState(() => _tab = index),
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Icons.auto_awesome_outlined),
-          selectedIcon: Icon(Icons.auto_awesome),
-          label: 'Scan',
-        ),
-        NavigationDestination(
-          icon: Icon(Icons.photo_library_outlined),
-          selectedIcon: Icon(Icons.photo_library),
-          label: 'Library',
-        ),
-      ],
-    ),
   );
 
   /// Which scan results are on screen: the running scan's, otherwise the last
@@ -871,10 +1182,14 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
         if (Platform.isAndroid)
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+            padding: compactSetup
+                ? EdgeInsets.zero
+                : const EdgeInsets.fromLTRB(20, 14, 20, 12),
             sliver: SliverToBoxAdapter(
               key: _folderSelectionKey,
-              child: compactSetup ? _compactSetup() : _folderSelection(),
+              child: compactSetup
+                  ? const SizedBox.shrink()
+                  : _folderSelection(),
             ),
           ),
         if (bothScans && !_scanActive)
@@ -897,8 +1212,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 selected: {_showBestResults},
                 onSelectionChanged: (value) => setState(() {
                   _showBestResults = value.first;
-                  _reviewFilter = _ReviewFilter.all;
-                }),
+                          }),
               ),
             ),
           ),
@@ -988,44 +1302,6 @@ class _LibraryPageState extends State<LibraryPage> {
       ],
     );
   }
-
-  /// One-line stand-in for the folder form once a scan has results, so the
-  /// results start near the top of the screen.
-  Widget _compactSetup() => Container(
-    padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-    decoration: BoxDecoration(
-      color: const Color(0xFFEEF3E8),
-      border: Border.all(color: const Color(0xFFDDE7D4)),
-      borderRadius: BorderRadius.circular(14),
-    ),
-    child: Row(
-      children: [
-        const Icon(Icons.folder_open_outlined, color: _green),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _selectedFolder?.name ?? 'Folder',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              Text(
-                _folderDateRange.label,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-              ),
-            ],
-          ),
-        ),
-        TextButton(
-          onPressed: () => setState(() => _setupExpanded = true),
-          child: const Text('New scan'),
-        ),
-      ],
-    ),
-  );
 
   Widget _header({bool compact = false}) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1155,17 +1431,18 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             for (final range in FolderDateRange.values)
               ChoiceChip(
-                label: Text(range.label),
+                avatar: range == FolderDateRange.custom
+                    ? const Icon(Icons.date_range_outlined, size: 16)
+                    : null,
+                label: Text(
+                  range == FolderDateRange.custom && _customRange != null
+                      ? '${_formatDate(_customRange!.start)} – ${_formatDate(_customRange!.end)}'
+                      : range.label,
+                ),
                 selected: _folderDateRange == range,
                 onSelected: _scanningFolder
                     ? null
-                    : (_) => setState(() {
-                        _folderDateRange = range;
-                        _folderScan = null;
-                        _bestShotsScan = null;
-                        _folderScanError = null;
-                        _bestShotsError = null;
-                      }),
+                    : (_) => _selectDateRange(range),
                 visualDensity: VisualDensity.compact,
               ),
           ],
@@ -1188,7 +1465,7 @@ class _LibraryPageState extends State<LibraryPage> {
               : const Icon(Icons.auto_awesome_outlined),
           label: Text(
             _scanActive && _scanningBestShots
-                ? 'Analyzing $_folderImagesScanned photos…'
+                ? _progressLabel('Analyzing')
                 : 'Find the best shots',
           ),
           style: FilledButton.styleFrom(
@@ -1215,7 +1492,7 @@ class _LibraryPageState extends State<LibraryPage> {
               : const Icon(Icons.copy_all_outlined),
           label: Text(
             _scanActive && !_scanningBestShots
-                ? 'Scanning $_folderImagesScanned photos…'
+                ? _progressLabel('Scanning')
                 : 'Find exact duplicates',
           ),
           style: OutlinedButton.styleFrom(
@@ -1223,6 +1500,7 @@ class _LibraryPageState extends State<LibraryPage> {
             foregroundColor: _green,
           ),
         ),
+        if (_scanActive) _scanProgressBar(),
         if (_scanActive)
           Padding(
             padding: const EdgeInsets.only(top: 7),
@@ -1524,111 +1802,36 @@ class _LibraryPageState extends State<LibraryPage> {
         child: Text(error, style: const TextStyle(color: Color(0xFF8A4437))),
       );
     }
-    if (scanningThisMode && scan == null) {
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xFFE6E8E0)),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text('Scanning $_folderImagesScanned image files…'),
-            ),
-            TextButton(
-              onPressed: _cancelRequested ? null : _cancelScan,
-              child: Text(_cancelRequested ? 'Stopping…' : 'Cancel'),
-            ),
-          ],
-        ),
-      );
-    }
+    // Progress shows on the scan button, with Cancel scan under it.
+    if (scanningThisMode && scan == null) return const SizedBox.shrink();
     if (scan == null) return const SizedBox.shrink();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            color: const Color(0xFFEEF3E8),
-            border: Border.all(color: const Color(0xFFDDE7D4)),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.folder_open_outlined, color: _green),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      scan.folderName,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _scanningFolder
-                        ? null
-                        : bestShots
-                        ? _scanBestShotsFolder
-                        : _scanFolder,
-                    child: const Text('Change'),
-                  ),
-                ],
-              ),
-              Text(
-                scan.duplicateGroups.isEmpty
-                    ? _noGroupsText(scan, bestShots: bestShots)
-                    : 'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.dateRange.label}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-              ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => ScannedFilesPage(
-                        scan: scan,
-                        loadPreview: _folderScanner.loadPreview,
-                      ),
-                    ),
-                  ),
-                  icon: const Icon(Icons.grid_view_outlined, size: 18),
-                  label: Text(
-                    'View scanned files (${scan.imagesScanned} of ${scan.imageFilesFound})',
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 8),
-        _spaceRecoverySummary(scan, bestShots: bestShots),
+        _resultsHeader(scan, bestShots: bestShots, groupLabel: groupLabel),
         if (bestShots && scan.duplicateGroups.isNotEmpty) ...[
-          _similarReviewNote(scan),
-          _reviewFilterChips(scan),
+          _reviewEntryButton(scan),
         ],
-        if (_scanRemovals(scan, bestShots: bestShots).isNotEmpty)
+        if (scan.duplicateGroups.isNotEmpty &&
+            (bestShots ||
+                _scanRemovals(scan, bestShots: false).isNotEmpty))
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: FilledButton.tonalIcon(
               onPressed: _scanningFolder
                   ? null
-                  : () => _deleteAllScanRemovables(bestShots: bestShots),
-              icon: const Icon(Icons.delete_sweep_outlined),
+                  : bestShots
+                  ? () => _showAutoClean(scan)
+                  : () => _deleteAllScanRemovables(bestShots: false),
+              icon: Icon(
+                bestShots
+                    ? Icons.auto_fix_high_outlined
+                    : Icons.delete_sweep_outlined,
+              ),
               label: Text(
                 bestShots
-                    ? 'Delete lower-ranked photos in ${_bulkGroups(scan, bestShots: true).length} confident group${_bulkGroups(scan, bestShots: true).length == 1 ? '' : 's'}'
+                    ? 'Keep all best shots · free up to ${_formatBytes(_potentialRemovals(scan, bestShots: true).fold<int>(0, (t, p) => t + p.size))}'
                     : 'Delete all duplicates',
               ),
               style: FilledButton.styleFrom(foregroundColor: _ink),
@@ -1645,7 +1848,9 @@ class _LibraryPageState extends State<LibraryPage> {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                bestShots
+                _freedBytes > 0
+                    ? 'Everything in this scan has been reviewed. Tap New scan to check another folder.'
+                    : bestShots
                     ? 'No similar photo groups found. PictoIQ groups visually alike shots taken close together and ranks face quality when faces are detected.'
                     : 'No exact duplicate photos found. Exact duplicates have identical file contents.',
                 style: TextStyle(color: Color(0xFF77796F)),
@@ -1654,16 +1859,6 @@ class _LibraryPageState extends State<LibraryPage> {
           )
         else
           ..._resultCards(scan, bestShots: bestShots),
-        if (bestShots &&
-            scan.duplicateGroups.isNotEmpty &&
-            !scan.duplicateGroups.any(_matchesFilter))
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
-            child: Text(
-              'No groups in this view.',
-              style: TextStyle(color: Color(0xFF77796F)),
-            ),
-          ),
       ],
     );
   }
@@ -1675,7 +1870,7 @@ class _LibraryPageState extends State<LibraryPage> {
   List<Widget> _resultCards(FolderScanResult scan, {required bool bestShots}) {
     final groups = [
       for (final group in scan.duplicateGroups)
-        if (!bestShots || _matchesFilter(group)) group,
+        group,
     ];
     if (!bestShots) return groups.map(_exactDuplicateCard).toList();
     final photos = scan.scannedPhotos;
@@ -1715,7 +1910,32 @@ class _LibraryPageState extends State<LibraryPage> {
       byEvent.putIfAbsent(eventOf(group), () => []).add(group);
     }
     final order = byEvent.keys.toList()..sort();
+    final hint = Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          const Icon(Icons.touch_app_outlined, size: 16, color: Color(0xFF77796F)),
+          const SizedBox(width: 6),
+          const Expanded(
+            child: Text(
+              'Tap a photo to enlarge it · tap its circle to keep that one',
+              style: TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+            ),
+          ),
+        ],
+      ),
+    );
+    // Within an event, groups that are safest to clean come first.
+    for (final list in byEvent.values) {
+      list.sort((a, b) {
+        final byConfidence = (a.evidence?.confidence.index ?? 3).compareTo(
+          b.evidence?.confidence.index ?? 3,
+        );
+        return byConfidence != 0 ? byConfidence : a.id.compareTo(b.id);
+      });
+    }
     return [
+      if (order.isNotEmpty) hint,
       for (final key in order) ...[
         if (headings && key < events.length)
           _eventHeader(events[key], scenes: byEvent[key]!.length),
@@ -1748,68 +1968,194 @@ class _LibraryPageState extends State<LibraryPage> {
     ),
   );
 
-  Widget _spaceRecoverySummary(
+  /// One compact card for the whole scan result: folder, the space that can
+  /// be freed, and what is ready now. Scan details are one tap away.
+  Widget _resultsHeader(
     FolderScanResult scan, {
     required bool bestShots,
+    required String groupLabel,
   }) {
-    final removable = _scanRemovals(scan, bestShots: bestShots);
-    final photos = removable.length;
-    final recoverableBytes = removable.fold<int>(
+    // Space freed if the top pick (or the user's pick) is kept in every
+    // group, whether or not the group is confident enough to clean in bulk.
+    final potential = _potentialRemovals(scan, bestShots: bestShots);
+    final potentialBytes = potential.fold<int>(
       0,
       (total, photo) => total + photo.size,
     );
-    final needReview = _groupsNeedingReview(scan, bestShots: bestShots);
-    final description = photos == 0
-        ? (scan.duplicateGroups.isEmpty
-              ? 'No removable copies found in this folder.'
-              : 'Nothing is ready for automatic cleanup; review each group below.')
-        : bestShots
-        ? 'Ready now: $photos similar photos in confident groups. ${needReview == 0 ? 'Review groups before deleting.' : '$needReview group${needReview == 1 ? '' : 's'} need${needReview == 1 ? 's' : ''} your review.'}'
-        : 'Potential from $photos exact copies; review groups before deleting.';
+    final ready = _scanRemovals(scan, bestShots: bestShots);
+    final readyBytes = ready.fold<int>(0, (total, photo) => total + photo.size);
+    final groups = scan.duplicateGroups.length;
+    final status = groups == 0
+        ? (_freedBytes > 0
+              ? 'All done. Nothing left to review in this scan.'
+              : _noGroupsText(scan, bestShots: bestShots))
+        : !bestShots
+        ? 'Exact copies. Review before deleting.'
+        : ready.isEmpty
+        ? 'Nothing is ready for bulk cleanup. Check each group below.'
+        : 'Ready now: ${ready.length} photo${ready.length == 1 ? '' : 's'} (${_formatBytes(readyBytes)}) in confident groups.';
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(14, 8, 4, 12),
       decoration: BoxDecoration(
         color: const Color(0xFFE8F3E8),
         border: Border.all(color: const Color(0xFFD2E5D1)),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.storage_rounded, color: _green, size: 23),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Potential space to recover',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          Row(
+            children: [
+              const Icon(Icons.folder_open_outlined, color: _green, size: 20),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  scan.folderName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  description,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Color(0xFF596252),
+              ),
+              TextButton(
+                onPressed: _scanningFolder
+                    ? null
+                    : () {
+                        setState(() => _setupExpanded = true);
+                        _scrollToFolderSelection();
+                      },
+                child: const Text('New scan'),
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (value) {
+                  if (value == 'files') {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => ScannedFilesPage(
+                          scan: scan,
+                          loadPreview: _folderScanner.loadPreview,
+                        ),
+                      ),
+                    );
+                  } else {
+                    _showScanDetails(scan, bestShots: bestShots, groupLabel: groupLabel);
+                  }
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'files',
+                    child: Text(
+                      'View scanned files (${scan.imagesScanned} of ${scan.imageFilesFound})',
+                    ),
                   ),
-                ),
-              ],
-            ),
+                  const PopupMenuItem(
+                    value: 'details',
+                    child: Text('About this scan'),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Text(
-            _formatBytes(recoverableBytes),
-            style: const TextStyle(
-              color: _green,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
+          if (groups > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    _formatBytes(potentialBytes),
+                    style: const TextStyle(
+                      color: _green,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text(
+                      'can be freed',
+                      style: TextStyle(fontSize: 13, color: Color(0xFF596252)),
+                    ),
+                  ),
+                  Text(
+                    '$groups $groupLabel',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF596252),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (_freedBytes > 0)
+            Padding(
+              padding: const EdgeInsets.only(right: 10, top: 2),
+              child: Row(
+                children: [
+                  const Icon(Icons.check_circle, color: _green, size: 20),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      groups == 0
+                          ? '${_formatBytes(_freedBytes)} freed'
+                          : 'Freed so far: ${_formatBytes(_freedBytes)}',
+                      style: TextStyle(
+                        color: _green,
+                        fontWeight: FontWeight.w800,
+                        fontSize: groups == 0 ? 22 : 13,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '$_freedPhotos photo${_freedPhotos == 1 ? '' : 's'}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF596252),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(right: 10, top: 2),
+            child: Text(
+              status,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
             ),
           ),
         ],
       ),
     );
   }
+
+  Future<void> _showScanDetails(
+    FolderScanResult scan, {
+    required bool bestShots,
+    required String groupLabel,
+  }) => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('About this scan'),
+      content: SingleChildScrollView(
+        child: Text(
+          [
+            'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.dateRange.label}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
+            if (bestShots && scan.duplicateGroups.isNotEmpty)
+              _reviewNoteText(scan),
+            'Space figures assume you keep only the top pick (or your pick) in each group.',
+          ].join('\n\n'),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Close'),
+        ),
+      ],
+    ),
+  );
 
   Widget _recoveryEstimate(int bytes) => Container(
     width: double.infinity,
@@ -1889,7 +2235,7 @@ class _LibraryPageState extends State<LibraryPage> {
                         ],
                       ),
                     ),
-                    _photoRatingButtons(photo.uri),
+                    _keepSelector(group, photo, keepIds),
                   ],
                 ),
               ),
@@ -1943,44 +2289,91 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
+  /// Shows a photo large. The small scan preview appears at once and is
+  /// swapped for a sharper decode of the original as soon as that is ready.
   Future<void> _showExactPhotoPreview(FolderScanPhoto photo) async {
     final preview = photo.previewBytes;
     if (preview == null) return;
+    var shown = preview;
+    var loading = true;
+    var started = false;
 
     await showDialog<void>(
       context: context,
-      builder: (dialogContext) => Dialog(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                photo.relativePath,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          if (!started) {
+            started = true;
+            _folderScanner.loadLargePreview(photo.uri).then((bytes) {
+              if (!dialogContext.mounted) return;
+              setDialogState(() {
+                shown = bytes ?? shown;
+                loading = false;
+              });
+            });
+          }
+          return Dialog(
+            insetPadding: const EdgeInsets.all(8),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    photo.relativePath,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.sizeOf(dialogContext).height * .78,
+                    ),
+                    child: Stack(
+                      alignment: Alignment.bottomCenter,
+                      children: [
+                        InteractiveViewer(
+                          minScale: 1,
+                          maxScale: 6,
+                          child: Image.memory(
+                            shown,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
+                            filterQuality: FilterQuality.high,
+                          ),
+                        ),
+                        if (loading)
+                          const Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Chip(
+                              avatar: SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              label: Text('Loading sharper photo…'),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(dialogContext).height * .65,
-                ),
-                child: InteractiveViewer(
-                  minScale: 1,
-                  maxScale: 4,
-                  child: Image.memory(preview, fit: BoxFit.contain),
-                ),
-              ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Close'),
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -1993,8 +2386,8 @@ class _LibraryPageState extends State<LibraryPage> {
         const Color(0xFFFFF4E0),
       ),
       SimilarityConfidence.low => (
-        const Color(0xFF9A3F2F),
-        const Color(0xFFFBE9E5),
+        const Color(0xFF7A5200),
+        const Color(0xFFFFF4E0),
       ),
     };
     return Container(
@@ -2006,7 +2399,11 @@ class _LibraryPageState extends State<LibraryPage> {
       child: Text(
         evidence.isSession
             ? 'Same session'
-            : '${evidence.confidence.label} match',
+            : switch (evidence.confidence) {
+                SimilarityConfidence.high => 'Same shot',
+                SimilarityConfidence.medium => 'Similar',
+                SimilarityConfidence.low => 'Check',
+              },
         style: TextStyle(
           fontSize: 11,
           fontWeight: FontWeight.w700,
@@ -2016,59 +2413,15 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// Tells the user how many similar-photo groups were left for them.
-  bool _matchesFilter(FolderDuplicateGroup group) => switch (_reviewFilter) {
-    _ReviewFilter.all => true,
-    _ReviewFilter.ready => _isBulkSafe(group, bestShots: true),
-    _ReviewFilter.review => !_isBulkSafe(group, bestShots: true),
-  };
-
-  /// All / Ready to clean / Needs review, with counts, so confident groups
-  /// can be handled first and doubtful ones looked at on their own.
-  Widget _reviewFilterChips(FolderScanResult scan) {
-    final ready = scan.duplicateGroups
-        .where((group) => _isBulkSafe(group, bestShots: true))
-        .length;
-    final total = scan.duplicateGroups.length;
-    Widget chip(String label, _ReviewFilter value) => ChoiceChip(
-      label: Text(label),
-      selected: _reviewFilter == value,
-      onSelected: (_) => setState(() => _reviewFilter = value),
-      visualDensity: VisualDensity.compact,
-    );
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Wrap(
-        spacing: 6,
-        children: [
-          chip('All ($total)', _ReviewFilter.all),
-          chip('Ready to clean ($ready)', _ReviewFilter.ready),
-          chip('Needs review (${total - ready})', _ReviewFilter.review),
-        ],
-      ),
-    );
-  }
-
-  Widget _similarReviewNote(FolderScanResult scan) {
+  String _reviewNoteText(FolderScanResult scan) {
     final review = _groupsNeedingReview(scan, bestShots: true);
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Text(
-        review == 0
-            ? 'Similar photos are grouped by appearance and timing. They are not guaranteed duplicates, so check each group before deleting.'
-            : '$review of ${scan.duplicateGroups.length} groups are not matched confidently enough to clean up in bulk. Open them to choose what to keep.',
-        style: const TextStyle(fontSize: 11, color: Color(0xFF77796F)),
-      ),
-    );
+    return review == 0
+        ? 'Similar photos are grouped by appearance. They are not guaranteed duplicates, so check each group before deleting.'
+        : '$review of ${scan.duplicateGroups.length} groups are not matched confidently enough to clean up in bulk. Open them to choose what to keep.';
   }
 
   Widget _folderDuplicateCard(FolderDuplicateGroup group) {
     final decision = _decisionFor(group, bestShots: true);
-    final evidence = group.evidence;
-    final recoverableBytes = _groupRecoveryBytes(group, bestShots: true);
-    final removeIds = {
-      for (final photo in _groupRemovals(group, bestShots: true)) photo.uri,
-    };
     final keepIds = decision.keepIds;
     return Card(
       margin: const EdgeInsets.only(top: 8),
@@ -2077,142 +2430,623 @@ class _LibraryPageState extends State<LibraryPage> {
         side: const BorderSide(color: Color(0xFFE6E8E0)),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: Stack(
+        children: [
+          Padding(
+        padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${group.photos.length} similar photos',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final count = group.photos.length;
+                final columns = count >= 9 ? 5 : 4;
+                const gap = 8.0;
+                final width = ((constraints.maxWidth - gap * (columns - 1)) /
+                        columns)
+                    .floorToDouble();
+                return Wrap(
+                  alignment: WrapAlignment.start,
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (final photo in group.bestFirst)
+                      _photoTile(group, photo, keepIds, decision, width),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+            _cardActions(group, decision),
+          ],
+        ),
+          ),
+          // Skip this group: nothing is deleted and it leaves the list.
+          Positioned(
+            top: 0,
+            right: 0,
+            child: IconButton(
+              tooltip: 'Skip this group',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints.tightFor(width: 30, height: 30),
+              padding: EdgeInsets.zero,
+              iconSize: 18,
+              color: const Color(0xFF77796F),
+              onPressed: _scanningFolder ? null : () => _skipGroup(group),
+              icon: const Icon(Icons.close),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Sets a group aside without deleting anything (the person decided to keep
+  /// every photo in it). The snackbar can bring it back.
+  void _skipGroup(FolderDuplicateGroup group) {
+    final scan = _bestShotsScan;
+    if (scan == null) return;
+    final updated = scan.withoutGroup(group.id);
+    setState(() => _bestShotsScan = updated);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Group skipped. Nothing was deleted.'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () {
+              if (mounted && identical(_bestShotsScan, updated)) {
+                setState(() => _bestShotsScan = scan);
+              }
+            },
+          ),
+        ),
+      );
+  }
+
+  /// The clean-up button. In a two-photo group it sits in the free third
+  /// slot beside the photos; otherwise it spans the row below them.
+  /// Compare and the keep button, in one row under the photos of every group.
+  Widget _cardActions(
+    FolderDuplicateGroup group,
+    KeepDecision decision,
+  ) {
+    // The match tag (Same shot / Similar / Check) is hidden for now; bring it
+    // back with _confidenceChip(group.evidence!).
+    final compare = FilledButton.tonalIcon(
+      onPressed: () => _showCompareShots(group),
+      icon: const Icon(Icons.compare_outlined, size: 18),
+      label: const Text('Compare'),
+      style: FilledButton.styleFrom(
+        foregroundColor: _ink,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      ),
+    );
+    final Widget keep;
+    if (!decision.hasDecision) {
+      keep = const Text(
+        'Choose the photo to keep.',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+      );
+    } else {
+      final word = decision.isUserChoice ? 'Keep my pick' : 'Keep best';
+      final size =
+          'Save ${_formatBytes(_groupRecoveryBytes(group, bestShots: true))}';
+      keep = FilledButton.tonal(
+        onPressed: _scanningFolder ? null : () => _deleteSimilarShots(group),
+        style: FilledButton.styleFrom(
+          foregroundColor: _ink,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text('$word · $size', maxLines: 1),
+        ),
+      );
+    }
+    return Row(
+      children: [
+        compare,
+        const SizedBox(width: 8),
+        Expanded(child: keep),
+      ],
+    );
+  }
+
+  /// Every group, safest first: the order review mode
+  /// steps through.
+  List<FolderDuplicateGroup> _reviewQueue(FolderScanResult scan) {
+    final groups = [
+      for (final group in scan.duplicateGroups)
+        group,
+    ];
+    groups.sort((a, b) {
+      final byConfidence = (a.evidence?.confidence.index ?? 3).compareTo(
+        b.evidence?.confidence.index ?? 3,
+      );
+      return byConfidence != 0 ? byConfidence : a.id.compareTo(b.id);
+    });
+    return groups;
+  }
+
+  Widget _reviewEntryButton(FolderScanResult scan) {
+    final count = _reviewQueue(scan).length;
+    if (count == 0) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: OutlinedButton.icon(
+        onPressed: _scanningFolder
+            ? null
+            : () => _showReviewMode(_reviewQueue(scan)),
+        icon: const Icon(Icons.view_carousel_outlined, size: 18),
+        label: Text('Review one by one ($count)'),
+        style: OutlinedButton.styleFrom(foregroundColor: _ink),
+      ),
+    );
+  }
+
+  /// Full-screen, one group at a time: big photos, choose the one to keep,
+  /// then "Keep this" or "Skip". Nothing is deleted while reviewing; at the
+  /// end the chosen groups are listed once for a single confirmation.
+  Future<void> _showReviewMode(List<FolderDuplicateGroup> queue) async {
+    if (queue.isEmpty) return;
+    var index = 0;
+    var apply = false;
+    final accepted = <String>[];
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (routeContext) => StatefulBuilder(
+          builder: (context, setLocal) {
+            final byId = {for (final group in queue) group.id: group};
+            var pendingPhotos = 0;
+            var pendingBytes = 0;
+            for (final id in accepted) {
+              final group = byId[id];
+              if (group == null) continue;
+              final removals = _groupRemovals(group, bestShots: true);
+              pendingPhotos += removals.length;
+              pendingBytes += removals.fold<int>(
+                0,
+                (total, photo) => total + photo.size,
+              );
+            }
+            final summary = pendingPhotos == 0
+                ? 'Nothing selected to delete yet'
+                : 'To delete: $pendingPhotos photo${pendingPhotos == 1 ? '' : 's'} · ${_formatBytes(pendingBytes)}';
+
+            if (index >= queue.length) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Review finished'),
+                  leading: CloseButton(
+                    onPressed: () => Navigator.pop(routeContext),
                   ),
                 ),
-                if (evidence != null) _confidenceChip(evidence),
-              ],
-            ),
-            if (evidence != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                evidence.notes.join(' · '),
-                style: const TextStyle(fontSize: 11, color: Color(0xFF85877F)),
-              ),
-            ],
-            if (group.ranking != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                group.ranking!.headline,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-              ),
-            ],
-            if (decision.needsReview) ...[
-              const SizedBox(height: 6),
-              Text(
-                _reviewReason(group),
-                style: const TextStyle(fontSize: 11, color: Color(0xFF7A5200)),
-              ),
-            ],
-            const SizedBox(height: 6),
-            for (final photo in group.bestFirst)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (photo.previewBytes != null)
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: Image.memory(
-                          photo.previewBytes!,
-                          width: 56,
-                          height: 56,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const SizedBox(
-                            width: 56,
-                            height: 56,
-                            child: Icon(Icons.broken_image_outlined),
+                body: Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_outline,
+                          size: 56,
+                          color: _green,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          summary,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                      )
-                    else
-                      const SizedBox(
-                        width: 56,
-                        height: 56,
-                        child: Icon(Icons.image_not_supported_outlined),
-                      ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            photo.relativePath,
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Nothing is deleted until you confirm on the next screen.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF77796F),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: pendingPhotos == 0
+                              ? null
+                              : () {
+                                  apply = true;
+                                  Navigator.pop(routeContext);
+                                },
+                          icon: const Icon(Icons.delete_outline),
+                          label: Text(
+                            'Delete $pendingPhotos photo${pendingPhotos == 1 ? '' : 's'}',
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => Navigator.pop(routeContext),
+                          child: const Text('Close without deleting'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            final group = queue[index];
+            final decision = _decisionFor(group, bestShots: true);
+            final keepIds = decision.keepIds;
+            final bytes = _groupRecoveryBytes(group, bestShots: true);
+            final evidence = group.evidence;
+            return Scaffold(
+              appBar: AppBar(
+                title: Text('Review ${index + 1} of ${queue.length}'),
+                leading: CloseButton(
+                  onPressed: () => Navigator.pop(routeContext),
+                ),
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(3),
+                  child: LinearProgressIndicator(value: index / queue.length),
+                ),
+              ),
+              body: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            group.ranking?.headline ??
+                                '${group.photos.length} similar photos',
                             style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          Text(
-                            [
-                              if (_pickLabel(group, photo) != null)
-                                _pickLabel(group, photo)!,
-                              _stateLabel(photo.uri, keepIds, removeIds, decision),
-                              _shotSummary(group, photo),
-                            ].join(' · '),
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xFF85877F),
+                        ),
+                        if (evidence != null) _confidenceChip(evidence),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final width = (constraints.maxWidth - 8) / 2;
+                        return Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final photo in group.bestFirst)
+                              _photoTile(
+                                group,
+                                photo,
+                                keepIds,
+                                decision,
+                                width,
+                                onChanged: () => setLocal(() {}),
+                              ),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Tap the circle to choose the photo to keep. Tap a photo to enlarge it.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+                    ),
+                  ],
+                ),
+              ),
+              bottomNavigationBar: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        summary,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF596252),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          if (index > 0)
+                            TextButton(
+                              onPressed: () => setLocal(() {
+                                index -= 1;
+                                accepted.remove(queue[index].id);
+                              }),
+                              child: const Text('Back'),
+                            ),
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => setLocal(() => index += 1),
+                              child: const Text('Skip'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            flex: 2,
+                            child: FilledButton.icon(
+                              onPressed: decision.hasDecision
+                                  ? () {
+                                      if (!decision.isUserChoice) {
+                                        _chooseKeeper(
+                                          group,
+                                          decision.keepIds.first,
+                                        );
+                                      }
+                                      if (!accepted.contains(group.id)) {
+                                        accepted.add(group.id);
+                                      }
+                                      setLocal(() => index += 1);
+                                    }
+                                  : null,
+                              icon: const Icon(Icons.check, size: 18),
+                              label: Text(
+                                decision.hasDecision
+                                    ? 'Keep this · free ${_formatBytes(bytes)}'
+                                    : 'Choose a photo',
+                              ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    _photoRatingButtons(photo.uri),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            const SizedBox(height: 4),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 4,
-              children: [
-                TextButton.icon(
-                  onPressed: () => _showCompareShots(group),
-                  icon: const Icon(Icons.compare_outlined, size: 18),
-                  label: const Text('Compare'),
+            );
+          },
+        ),
+      ),
+    );
+    if (apply && accepted.isNotEmpty && mounted) {
+      await _deleteReviewedGroups(accepted);
+    }
+  }
+
+  /// Deletes the lower-ranked photos of the groups the user reviewed, after
+  /// one confirmation that lists what will go.
+  Future<void> _deleteReviewedGroups(List<String> groupIds) async {
+    final scan = _bestShotsScan;
+    if (scan == null || _scanningFolder) return;
+    final groups = [
+      for (final group in scan.duplicateGroups)
+        if (groupIds.contains(group.id)) group,
+    ];
+    final remove = [
+      for (final group in groups) ..._groupRemovals(group, bestShots: true),
+    ];
+    if (remove.isEmpty) return;
+    final bytes = remove.fold<int>(0, (total, photo) => total + photo.size);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          'Delete ${remove.length} photo${remove.length == 1 ? '' : 's'}?',
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'You reviewed ${groups.length} group${groups.length == 1 ? '' : 's'}. PictoIQ keeps the photo you chose in each and deletes the others from "${scan.folderName}". This cannot be undone.',
+              ),
+              const SizedBox(height: 10),
+              _recoveryEstimate(bytes),
+              const SizedBox(height: 10),
+              for (final photo in remove.take(8))
+                Text(
+                  photo.relativePath,
+                  style: const TextStyle(fontSize: 12),
                 ),
-                if (group.photos.any((p) => _photoRating(p.uri) != 0))
-                  TextButton(
-                    onPressed: () => _clearGroupMarks(group),
-                    child: const Text('Reset my choices'),
+              if (remove.length > 8)
+                Text(
+                  'and ${remove.length - 8} more…',
+                  style: const TextStyle(fontSize: 12),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text('Delete ${remove.length}'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _scanningFolder = true;
+      _scanningBestShots = true;
+    });
+    var freedBytes = 0;
+    var failedDeletes = 0;
+    final deleted = <String>{};
+    for (final photo in remove) {
+      try {
+        await _folderScanner.deleteFile(photo.uri);
+        deleted.add(photo.uri);
+        freedBytes += photo.size;
+      } catch (_) {
+        failedDeletes += 1;
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _freedBytes += freedBytes;
+        _freedPhotos += deleted.length;
+        _bestShotsScan = scan.withoutPhotos(deleted);
+        _scanningFolder = false;
+        _scanningBestShots = false;
+      });
+      _showMessage(
+        failedDeletes == 0
+            ? 'Freed about ${_formatBytes(freedBytes)} from ${groups.length} reviewed group${groups.length == 1 ? '' : 's'}.'
+            : 'Freed about ${_formatBytes(freedBytes)}. $failedDeletes photos could not be deleted.',
+      );
+    }
+  }
+
+  /// A thumbnail with a short badge ("Best", "Softer", "Eyes closed") and a
+  /// round button that makes it the photo to keep. Tapping the picture
+  /// enlarges it.
+  Widget _photoTile(
+    FolderDuplicateGroup group,
+    FolderScanPhoto photo,
+    Set<String> keepIds,
+    KeepDecision decision,
+    double width, {
+    VoidCallback? onChanged,
+  }) {
+    final small = width < 120;
+    final selected = keepIds.contains(photo.uri);
+    final preview = photo.previewBytes;
+    final badge = selected
+        ? (width < 90
+              ? (decision.isUserChoice ? 'MINE' : 'BEST')
+              : (decision.isUserChoice ? 'YOUR PICK' : 'BEST SHOT'))
+        : _shortReason(group.ranking?.shotFor(photo.uri));
+    return SizedBox(
+      width: width,
+      child: AspectRatio(
+        aspectRatio: 3 / 4,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            GestureDetector(
+              onTap: preview == null ? null : () => _showExactPhotoPreview(photo),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected ? _green : const Color(0xFFE6E8E0),
+                    width: selected ? 3 : 1,
                   ),
-              ],
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(selected ? 9 : 11),
+                  child: preview == null
+                      ? const ColoredBox(
+                          color: Color(0xFFF0F1EC),
+                          child: Icon(Icons.image_not_supported_outlined),
+                        )
+                      : Image.memory(
+                          preview,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const ColoredBox(
+                            color: Color(0xFFF0F1EC),
+                            child: Icon(Icons.broken_image_outlined),
+                          ),
+                        ),
+                ),
+              ),
             ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: decision.hasDecision
-                  ? FilledButton.tonalIcon(
-                      onPressed: _scanningFolder
-                          ? null
-                          : () => _deleteSimilarShots(group),
-                      icon: const Icon(Icons.delete_outline, size: 18),
-                      label: Text(
-                        'Keep ${_keptSummary(_groupKeepers(group, bestShots: true))} · recover up to ${_formatBytes(recoverableBytes)}',
+            if (badge != null)
+              Positioned(
+                left: 4,
+                top: 4,
+                child: Container(
+                  constraints: BoxConstraints(maxWidth: width - 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: selected ? _green : const Color(0xCC3A3D35),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      badge,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: small ? 10 : 11,
+                        fontWeight: FontWeight.w700,
                       ),
-                      style: FilledButton.styleFrom(foregroundColor: _ink),
-                    )
-                  : const Text(
-                      'Give a thumbs-up to the photo you want to keep.',
-                      style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
                     ),
+                  ),
+                ),
+              ),
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: Tooltip(
+                message: selected ? 'This photo will be kept' : 'Keep this photo',
+                child: InkResponse(
+                  onTap: selected
+                      ? null
+                      : () {
+                          _chooseKeeper(group, photo.uri);
+                          onChanged?.call();
+                        },
+                  radius: 24,
+                  child: Padding(
+                    padding: EdgeInsets.all(small ? 4 : 6),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Color(0xE6FFFFFF),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        selected
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        size: small ? 22 : 26,
+                        color: selected ? _green : const Color(0xFF77796F),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// One or two words on why a photo is not the pick, for its badge.
+  String? _shortReason(RankedShot? shot) {
+    if (shot == null) return null;
+    final reasons = [...shot.disqualifiers, ...shot.concerns];
+    for (final reason in reasons) {
+      final text = reason.toLowerCase();
+      if (text.contains('blurry')) return 'Blur detected';
+      if (text.contains('softer')) return 'Softer';
+      if (text.contains('eyes closed')) return 'Eyes closed';
+      if (text.contains('cut off')) return 'Cut off';
+      if (text.contains('looking away')) return 'Looking away';
+      if (text.contains('washed out') || text.contains('overexposed')) {
+        return 'Too bright';
+      }
+      if (text.contains('too dark') ||
+          text.contains('underexposed') ||
+          text.contains('dark areas')) {
+        return 'Too dark';
+      }
+      if (text.contains('lower resolution')) return 'Lower quality';
+      if (text.contains('no face')) return 'No face';
+    }
+    return null;
   }
 
   /// Marks [uri] as the only photo to keep in [group]: a thumbs-up for it and
@@ -2222,16 +3056,6 @@ class _LibraryPageState extends State<LibraryPage> {
     setState(() {
       for (final photo in group.photos) {
         _photoRatings[photo.uri] = photo.uri == uri ? 1 : 0;
-      }
-    });
-  }
-
-  /// Removes the user's thumbs-up and thumbs-down marks from [group], which
-  /// returns it to PictoIQ's suggestion (or to nothing in manual mode).
-  void _clearGroupMarks(FolderDuplicateGroup group) {
-    setState(() {
-      for (final photo in group.photos) {
-        _photoRatings.remove(photo.uri);
       }
     });
   }
@@ -2284,6 +3108,17 @@ class _LibraryPageState extends State<LibraryPage> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+                if (group.evidence != null && group.evidence!.notes.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      'Why grouped: ${group.evidence!.notes.join(' · ')}',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF77796F),
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 4),
                 Text(
                   ranking == null
@@ -2356,6 +3191,10 @@ class _LibraryPageState extends State<LibraryPage> {
     final signals = features?.signals;
     final faces = features?.faces;
     final chosen = _photoRating(photo.uri) > 0;
+    // Space freed if this is the photo kept and the rest are deleted.
+    final saves = group.photos
+        .where((other) => other.uri != photo.uri)
+        .fold<int>(0, (total, other) => total + other.size);
     Widget line(IconData icon, Color color, String text) => Padding(
       padding: const EdgeInsets.only(top: 3),
       child: Row(
@@ -2478,14 +3317,14 @@ class _LibraryPageState extends State<LibraryPage> {
                       setDialogState(() {});
                     },
                     icon: const Icon(Icons.check, size: 16),
-                    label: const Text('Your pick · tap to undo'),
+                    label: Text('Your pick · save ${_formatBytes(saves)} · undo'),
                   )
                 : FilledButton.tonal(
                     onPressed: () {
                       _chooseKeeper(group, photo.uri);
                       setDialogState(() {});
                     },
-                    child: const Text('Keep this one'),
+                    child: Text('Keep this · save ${_formatBytes(saves)}'),
                   ),
           ),
         ],
@@ -2503,19 +3342,6 @@ class _LibraryPageState extends State<LibraryPage> {
       return ranking.finalists.first.id == shot.id ? 'Top pick' : 'Finalist';
     }
     return shot.isDisqualified ? 'Has a fault' : null;
-  }
-
-  String _stateLabel(
-    String uri,
-    Set<String> keepIds,
-    Set<String> removeIds,
-    KeepDecision decision,
-  ) {
-    if (keepIds.contains(uri)) {
-      return decision.isUserChoice ? 'Kept: your pick' : 'Suggested to keep';
-    }
-    if (removeIds.contains(uri)) return 'Would be deleted';
-    return 'Not selected';
   }
 
   String _keptSummary(List<FolderScanPhoto> keepers) {
@@ -2730,7 +3556,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('I choose which photos to keep'),
                   subtitle: const Text(
-                    'PictoIQ never picks a photo to keep in similar-shot groups. Nothing is selected for deletion until you give a photo a thumbs-up.',
+                    'PictoIQ never picks a photo to keep in similar-shot groups. Nothing is selected for deletion until you choose a photo to keep.',
                     style: TextStyle(fontSize: 12),
                   ),
                   value: _settings.manualSelectionOnly,

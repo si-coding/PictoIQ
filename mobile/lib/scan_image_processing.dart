@@ -30,7 +30,10 @@ Future<Uint8List> collectImageBytes(Stream<List<int>> stream) async {
 
 /// JPEGs are subsampled during decoding; other formats have a pixel budget
 /// because their decoders still allocate a full frame before resizing.
-img.Image? decodeAnalysisImage(Uint8List bytes) {
+img.Image? decodeAnalysisImage(
+  Uint8List bytes, {
+  int edge = maxAnalysisEdge,
+}) {
   final decoder = img.findDecoderForData(bytes);
   final info = decoder?.startDecode(bytes);
   if (decoder == null || info == null) return null;
@@ -41,7 +44,7 @@ img.Image? decodeAnalysisImage(Uint8List bytes) {
       throw const FormatException('JPEG exceeds the source pixel budget.');
     }
     var scale = 1;
-    while (scale < 8 && longestEdge / (scale * 2) >= maxAnalysisEdge) {
+    while (scale < 8 && longestEdge / (scale * 2) >= edge) {
       scale *= 2;
     }
     if (((info.width + scale - 1) ~/ scale) *
@@ -60,7 +63,7 @@ img.Image? decodeAnalysisImage(Uint8List bytes) {
     image = decoder.decode(bytes, frame: 0);
   }
   if (image == null) return null;
-  return resizeLongestEdge(img.bakeOrientation(image), maxAnalysisEdge);
+  return resizeLongestEdge(img.bakeOrientation(image), edge);
 }
 
 img.Image resizeLongestEdge(img.Image image, int edge) {
