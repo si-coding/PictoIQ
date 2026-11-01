@@ -8,6 +8,14 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
+import 'package:photo_manager/photo_manager.dart'
+    show
+        AssetEntity,
+        AssetPathEntity,
+        PermissionState,
+        PhotoManager,
+        RequestType,
+        ThumbnailSize;
 import 'package:saf/saf.dart';
 
 import 'scan_image_processing.dart';
@@ -263,6 +271,8 @@ class FolderScanResult {
     required this.duplicateGroups,
     required this.bestShotsScan,
     required this.dateRange,
+    this.rangeStart,
+    this.rangeEnd,
     this.imagesSkipped = 0,
     this.imageFilesFound = 0,
     this.imagesOutsideDateRange = 0,
@@ -277,6 +287,35 @@ class FolderScanResult {
   final List<FolderDuplicateGroup> duplicateGroups;
   final bool bestShotsScan;
   final FolderDateRange dateRange;
+
+  /// The first and last day the scan covered (null for "Current folder").
+  final DateTime? rangeStart;
+  final DateTime? rangeEnd;
+
+  /// The date range in words for result screens, for example
+  /// "Last 7 days (25 Oct 2026 – 1 Nov 2026)" or "All dates".
+  String get rangeDescription {
+    if (dateRange == FolderDateRange.currentFolder) return 'All dates';
+    String day(DateTime d) {
+      const months = [
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      ];
+      return '${d.day} ${months[d.month - 1]} ${d.year}';
+    }
+
+    final from = rangeStart;
+    final to = rangeEnd;
+    final dates = from != null && to != null
+        ? '${day(from)} – ${day(to)}'
+        : from != null
+        ? 'from ${day(from)}'
+        : to != null
+        ? 'up to ${day(to)}'
+        : null;
+    if (dateRange == FolderDateRange.custom) return dates ?? 'Custom range';
+    return dates == null ? dateRange.label : '${dateRange.label} ($dates)';
+  }
 
   /// Images that could not be read or decoded (for example HEIC files) and
   /// were left out of the scan, so they can never be offered for deletion.
@@ -317,6 +356,8 @@ class FolderScanResult {
       duplicateGroups: List.unmodifiable(groups),
       bestShotsScan: bestShotsScan,
       dateRange: dateRange,
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
@@ -349,6 +390,8 @@ class FolderScanResult {
       duplicateGroups: List.unmodifiable(groups),
       bestShotsScan: bestShotsScan,
       dateRange: dateRange,
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
@@ -370,6 +413,8 @@ class FolderScanResult {
     ]),
     bestShotsScan: bestShotsScan,
     dateRange: dateRange,
+    rangeStart: rangeStart,
+    rangeEnd: rangeEnd,
     imagesSkipped: imagesSkipped,
     imageFilesFound: imageFilesFound,
     imagesOutsideDateRange: imagesOutsideDateRange,
@@ -404,6 +449,47 @@ Future<Uint8List?> _largePreviewInIsolate(Uint8List bytes) => Isolate.run(() {
       : encodePreview(decoded, edge: 2048, quality: 90);
 });
 
+/// A photo album from the phone's media library (Camera, Screenshots, ...).
+class MediaAlbum {
+  const MediaAlbum({required this.id, required this.name, required this.count});
+
+  final String id;
+  final String name;
+  final int count;
+
+  /// The [FolderSelection] that scans this album.
+  FolderSelection get selection => FolderSelection(
+    uri: '${FolderDuplicateScanner.albumPrefix}$id',
+    name: name,
+  );
+}
+
+/// One file found while listing a folder or album, before any filtering.
+class _SourceFile {
+  const _SourceFile({
+    required this.uri,
+    required this.name,
+    required this.relativePath,
+    required this.length,
+    required this.lastModified,
+    required this.dateMs,
+    this.isCandidate = true,
+  });
+
+  final String uri;
+  final String name;
+  final String relativePath;
+  final int length;
+  final int lastModified;
+
+  /// The date the date-range filter uses (date taken for the media library,
+  /// modified time for folders).
+  final int dateMs;
+
+  /// False for directories, thumbnails and non-image files.
+  final bool isCandidate;
+}
+
 /// Runs [_analyzeShot] in a background isolate. A top-level function keeps
 /// the closure's captured state to just these arguments; a closure built
 /// inside the scan loop would drag the scan's callbacks and results into the
@@ -429,6 +515,148 @@ class FolderDuplicateScanner {
   }) : _saf = saf ?? Saf();
 
   final Saf _saf;
+
+  /// A [FolderSelection.uri] that starts with this is a media-library album.
+  static const albumPrefix = 'album:';
+
+  /// A photo uri that starts with this lives in the media library.
+  static const mediaPrefix = 'media:';
+
+  /// Asks for access to the phone's photos. True when granted (full or the
+  /// photos the user chose to share).
+  Future<bool> requestMediaAccess() async {
+    final state = await PhotoManager.requestPermissionExtend();
+    return state == PermissionState.authorized ||
+        state == PermissionState.limited;
+  }
+
+  Future<List<AssetPathEntity>>? _albumPathsCache;
+
+  /// Albums are looked up once per screen visit (see [listAlbums]), then
+  /// reused for covers and scans.
+  Future<List<AssetPathEntity>> _albumPaths({bool refresh = false}) {
+    if (refresh || _albumPathsCache == null) {
+      _albumPathsCache = PhotoManager.getAssetPathList(
+        type: RequestType.image,
+        hasAll: true,
+      );
+    }
+    return _albumPathsCache!;
+  }
+
+  /// Every album with at least one photo: "All photos" first, then the
+  /// biggest albums.
+  Future<List<MediaAlbum>> listAlbums() async {
+    final albums = <MediaAlbum>[];
+    final all = <MediaAlbum>[];
+    for (final path in await _albumPaths(refresh: true)) {
+      final count = await path.assetCountAsync;
+      if (count == 0) continue;
+      final album = MediaAlbum(
+        id: path.id,
+        name: path.isAll ? 'All photos' : path.name,
+        count: count,
+      );
+      (path.isAll ? all : albums).add(album);
+    }
+    albums.sort((a, b) => b.count.compareTo(a.count));
+    return [...all, ...albums];
+  }
+
+  Future<AssetPathEntity?> _albumPath(String id) async {
+    for (final path in await _albumPaths()) {
+      if (path.id == id) return path;
+    }
+    return null;
+  }
+
+  /// Photos [start] up to [end] (newest first) of the album [id].
+  Future<List<AssetEntity>> albumAssets(String id, int start, int end) async {
+    final path = await _albumPath(id);
+    if (path == null) return const [];
+    return path.getAssetListRange(start: start, end: end);
+  }
+
+  /// Small pictures for photos [start] up to [end] of album [id].
+  Future<List<Uint8List?>> albumThumbnails(String id, int start, int end) async {
+    final assets = await albumAssets(id, start, end);
+    return Future.wait([
+      for (final asset in assets)
+        asset.thumbnailDataWithSize(const ThumbnailSize.square(240)),
+    ]);
+  }
+
+  /// The photo at [index] of album [id], for the enlarged view.
+  Future<Uint8List?> albumPhoto(String id, int index) async {
+    final assets = await albumAssets(id, index, index + 1);
+    if (assets.isEmpty) return null;
+    final bytes = await assets.first.originBytes;
+    if (bytes == null || bytes.length > maxEncodedImageBytes) return null;
+    return bytes;
+  }
+
+  /// A small cover picture for an album: its newest photo.
+  Future<Uint8List?> albumCover(String id) async {
+    final assets = await albumAssets(id, 0, 1);
+    if (assets.isEmpty) return null;
+    return assets.first.thumbnailDataWithSize(const ThumbnailSize.square(320));
+  }
+
+  Stream<_SourceFile> _listSaf(String folderUri) async* {
+    await for (final entry in _saf.walk(folderUri)) {
+      final file = entry.file;
+      yield _SourceFile(
+        uri: file.uri,
+        name: file.name,
+        relativePath: entry.relativePath,
+        length: file.length,
+        lastModified: file.lastModified,
+        dateMs: file.lastModified,
+        isCandidate:
+            !file.isDir &&
+            !_isSystemThumbnail(entry.relativePath) &&
+            _isImage(file.name, file.mimeType),
+      );
+    }
+  }
+
+  Stream<_SourceFile> _listAlbum(String albumUri) async* {
+    final path = await _albumPath(albumUri.substring(albumPrefix.length));
+    if (path == null) return;
+    final count = await path.assetCountAsync;
+    const page = 300;
+    for (var start = 0; start < count; start += page) {
+      final assets = await path.getAssetListRange(
+        start: start,
+        end: math.min(start + page, count),
+      );
+      for (final asset in assets) {
+        final title = asset.title ?? await asset.titleAsync;
+        yield _SourceFile(
+          uri: '$mediaPrefix${asset.id}',
+          name: title,
+          relativePath: '${asset.relativePath ?? ''}$title',
+          length: 0,
+          lastModified: asset.modifiedDateTime.millisecondsSinceEpoch,
+          dateMs: asset.createDateTime.millisecondsSinceEpoch,
+        );
+      }
+    }
+  }
+
+  /// The whole encoded file, from the media library or a picked folder.
+  Future<Uint8List> _readAll(String uri) async {
+    if (uri.startsWith(mediaPrefix)) {
+      final asset = await AssetEntity.fromId(uri.substring(mediaPrefix.length));
+      final bytes = await asset?.originBytes;
+      if (bytes == null) throw const FormatException('Photo is unavailable.');
+      if (bytes.length > maxEncodedImageBytes) {
+        throw const FormatException('Image exceeds the 64 MiB analysis limit.');
+      }
+      return bytes;
+    }
+    return collectImageBytes(await _saf.readFileStream(uri));
+  }
 
   /// Limits for grouping similar photos and rating the confidence of a group.
   final SimilarityThresholds thresholds;
@@ -551,6 +779,15 @@ class FolderDuplicateScanner {
         lower = null;
         upper = null;
     }
+    // The last day shown with the results: today for the quick ranges.
+    final DateTime? shownEnd = switch (dateRange) {
+      FolderDateRange.currentFolder => null,
+      FolderDateRange.custom =>
+        rangeTo == null
+            ? null
+            : DateTime(rangeTo.year, rangeTo.month, rangeTo.day),
+      _ => DateTime(now.year, now.month, now.day),
+    };
 
     // List the folder first (cheap), so the total is known and the slow part,
     // reading and analysing each photo, can run several at a time.
@@ -563,23 +800,21 @@ class FolderDuplicateScanner {
           int lastModified,
         })>[];
     var checked = 0;
-    await for (final entry in _saf.walk(folderUri)) {
+    final source = folderUri.startsWith(albumPrefix)
+        ? _listAlbum(folderUri)
+        : _listSaf(folderUri);
+    await for (final file in source) {
       if (shouldCancel?.call() ?? false) throw const ScanCancelled();
       checked += 1;
       // Report every file looked at (not just photos), so a folder full of
       // other files or out-of-range photos still shows movement.
       if (checked % 40 == 0) onListed?.call(pending.length, checked);
-      final file = entry.file;
-      if (file.isDir ||
-          _isSystemThumbnail(entry.relativePath) ||
-          !_isImage(file.name, file.mimeType)) {
-        continue;
-      }
+      if (!file.isCandidate) continue;
       imageFilesFound += 1;
       if (lower != null || upper != null) {
-        final modified = file.lastModified <= 0
+        final modified = file.dateMs <= 0
             ? null
-            : DateTime.fromMillisecondsSinceEpoch(file.lastModified);
+            : DateTime.fromMillisecondsSinceEpoch(file.dateMs);
         if (modified == null ||
             (lower != null && modified.isBefore(lower)) ||
             (upper != null && !modified.isBefore(upper))) {
@@ -590,7 +825,7 @@ class FolderDuplicateScanner {
       pending.add((
         uri: file.uri,
         name: file.name,
-        relativePath: entry.relativePath,
+        relativePath: file.relativePath,
         length: file.length,
         lastModified: file.lastModified,
       ));
@@ -612,16 +847,20 @@ class FolderDuplicateScanner {
       try {
         String? digest;
         _ShotAnalysis? analysis;
+        var size = file.length;
         if (bestShotsScan) {
-          final bytes = await collectImageBytes(
-            await _saf.readFileStream(file.uri),
-          );
+          final bytes = await _readAll(file.uri);
+          if (file.uri.startsWith(mediaPrefix)) size = bytes.length;
           analysis = await _analyzeInIsolate(
             bytes,
             file.lastModified,
             file.name,
             useFaceSignals,
           );
+        } else if (file.uri.startsWith(mediaPrefix)) {
+          final bytes = await _readAll(file.uri);
+          size = bytes.length;
+          digest = sha256.convert(bytes).toString();
         } else {
           digest = (await sha256.bind(await _saf.readFileStream(file.uri)).first)
               .toString();
@@ -660,7 +899,7 @@ class FolderDuplicateScanner {
           uri: file.uri,
           name: file.name,
           relativePath: entry.relativePath,
-          size: file.length,
+          size: size,
           modifiedAt: file.lastModified,
           sha256: digest,
           visualHash: visualHash,
@@ -770,6 +1009,8 @@ class FolderDuplicateScanner {
       duplicateGroups: List.unmodifiable(duplicates),
       bestShotsScan: bestShotsScan,
       dateRange: dateRange,
+      rangeStart: lower,
+      rangeEnd: shownEnd,
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
@@ -785,19 +1026,68 @@ class FolderDuplicateScanner {
   /// keep a preview for. Null when the file cannot be read or decoded.
   Future<Uint8List?> loadPreview(String uri) => _previewFor(uri);
 
-  Future<void> deleteFile(String uri) => _saf.delete(uri);
+  Future<void> deleteFile(String uri) async {
+    if ((await deleteFiles([uri])).isEmpty) {
+      throw const FormatException('The photo could not be deleted.');
+    }
+  }
+
+  /// Deletes [uris] and returns the ones that were deleted. Media-library
+  /// photos go in one request, so Android asks for a single confirmation.
+  Future<Set<String>> deleteFiles(List<String> uris) async {
+    final deleted = <String>{};
+    final media = {
+      for (final uri in uris)
+        if (uri.startsWith(mediaPrefix)) uri,
+    };
+    if (media.isNotEmpty) {
+      try {
+        final done = await PhotoManager.editor.deleteWithIds([
+          for (final uri in media) uri.substring(mediaPrefix.length),
+        ]);
+        deleted.addAll(done.map((id) => '$mediaPrefix$id'));
+      } catch (error) {
+        debugPrint('Media delete failed: ${error.runtimeType}');
+      }
+    }
+    for (final uri in uris) {
+      if (media.contains(uri)) continue;
+      try {
+        await _saf.delete(uri);
+        deleted.add(uri);
+      } catch (_) {
+        // Left out of the result; the caller reports it as not deleted.
+      }
+    }
+    return deleted;
+  }
 
   Future<Uint8List?> _previewFor(String uri) async {
     try {
-      final bytes = await collectImageBytes(await _saf.readFileStream(uri));
-      return await Isolate.run(() {
+      final bytes = await _readAll(uri);
+      final preview = await Isolate.run(() {
         final decoded = decodeAnalysisImage(bytes);
         return decoded == null
             ? null
             : encodePreview(decoded, edge: 480, quality: 82);
       });
+      if (preview != null) return preview;
     } catch (error) {
-      debugPrint('Folder preview unavailable: ${error.runtimeType}');
+      debugPrint('Folder preview decode failed: $error');
+    }
+    // The Dart decoder could not read it (or it was too big); Android's own
+    // decoder usually can, for photos in the media library.
+    return _libraryThumbnail(uri, 480);
+  }
+
+  /// A thumbnail made by Android for a media-library photo, or null.
+  Future<Uint8List?> _libraryThumbnail(String uri, int edge) async {
+    if (!uri.startsWith(mediaPrefix)) return null;
+    try {
+      final asset = await AssetEntity.fromId(uri.substring(mediaPrefix.length));
+      return await asset?.thumbnailDataWithSize(ThumbnailSize(edge, edge));
+    } catch (error) {
+      debugPrint('Library thumbnail unavailable: $error');
       return null;
     }
   }
@@ -806,12 +1096,13 @@ class FolderDuplicateScanner {
   /// to about 2048 px on its longest side. Null when it cannot be read.
   Future<Uint8List?> loadLargePreview(String uri) async {
     try {
-      final bytes = await collectImageBytes(await _saf.readFileStream(uri));
-      return await _largePreviewInIsolate(bytes);
+      final bytes = await _readAll(uri);
+      final large = await _largePreviewInIsolate(bytes);
+      if (large != null) return large;
     } catch (error) {
-      debugPrint('Large preview unavailable: ${error.runtimeType}');
-      return null;
+      debugPrint('Large preview decode failed: $error');
     }
+    return _libraryThumbnail(uri, 1600);
   }
 
   Future<void> dispose() => _faceDetector.close();

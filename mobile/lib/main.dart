@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:photo_manager/photo_manager.dart' show PhotoManager;
 
+import 'album_picker_page.dart';
 import 'app_settings.dart';
 import 'event_grouping.dart';
 import 'folder_duplicate_scanner.dart';
@@ -187,7 +190,24 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<void> _chooseFolder() async {
     if (_scanningFolder || _importing) return;
     try {
-      final selected = await _folderScanner.pickFolder();
+      // Albums first (fast, like a gallery picker); "Other folder…" falls
+      // back to Android's folder picker.
+      final choice = await Navigator.of(context).push<Object>(
+        MaterialPageRoute<Object>(
+          builder: (_) => AlbumPickerPage(
+            requestAccess: _folderScanner.requestMediaAccess,
+            loadAlbums: _folderScanner.listAlbums,
+            loadCover: _folderScanner.albumCover,
+            loadThumbnails: _folderScanner.albumThumbnails,
+            loadPhoto: _folderScanner.albumPhoto,
+            openSettings: PhotoManager.openSetting,
+          ),
+        ),
+      );
+      if (choice == null || !mounted) return;
+      final FolderSelection? selected = choice is FolderSelection
+          ? choice
+          : await _folderScanner.pickFolder();
       if (selected == null || !mounted) return;
       setState(() {
         _selectedFolder = selected;
@@ -576,18 +596,13 @@ class _LibraryPageState extends State<LibraryPage> {
       _scanningFolder = true;
       _scanningBestShots = false;
     });
-    var freedBytes = 0;
-    var failedDeletes = 0;
-    final deleted = <String>{};
-    for (final photo in newerCopies) {
-      try {
-        await _folderScanner.deleteFile(photo.uri);
-        deleted.add(photo.uri);
-        freedBytes += photo.size;
-      } catch (_) {
-        failedDeletes += 1;
-      }
-    }
+    final deleted = await _folderScanner.deleteFiles([
+      for (final photo in newerCopies) photo.uri,
+    ]);
+    final freedBytes = newerCopies
+        .where((photo) => deleted.contains(photo.uri))
+        .fold<int>(0, (total, photo) => total + photo.size);
+    final failedDeletes = newerCopies.length - deleted.length;
     if (mounted) {
       setState(() {
         _freedBytes += freedBytes;
@@ -708,18 +723,13 @@ class _LibraryPageState extends State<LibraryPage> {
       _scanningFolder = true;
       _scanningBestShots = true;
     });
-    var freedBytes = 0;
-    var failedDeletes = 0;
-    final deleted = <String>{};
-    for (final photo in remove) {
-      try {
-        await _folderScanner.deleteFile(photo.uri);
-        deleted.add(photo.uri);
-        freedBytes += photo.size;
-      } catch (_) {
-        failedDeletes += 1;
-      }
-    }
+    final deleted = await _folderScanner.deleteFiles([
+      for (final photo in remove) photo.uri,
+    ]);
+    final freedBytes = remove
+        .where((photo) => deleted.contains(photo.uri))
+        .fold<int>(0, (total, photo) => total + photo.size);
+    final failedDeletes = remove.length - deleted.length;
     if (mounted) {
       setState(() {
         _freedBytes += freedBytes;
@@ -930,18 +940,13 @@ class _LibraryPageState extends State<LibraryPage> {
       _scanningBestShots = bestShots;
       _folderImagesScanned = 0;
     });
-    var freedBytes = 0;
-    var failedDeletes = 0;
-    final deleted = <String>{};
-    for (final photo in remove) {
-      try {
-        await _folderScanner.deleteFile(photo.uri);
-        deleted.add(photo.uri);
-        freedBytes += photo.size;
-      } catch (_) {
-        failedDeletes += 1;
-      }
-    }
+    final deleted = await _folderScanner.deleteFiles([
+      for (final photo in remove) photo.uri,
+    ]);
+    final freedBytes = remove
+        .where((photo) => deleted.contains(photo.uri))
+        .fold<int>(0, (total, photo) => total + photo.size);
+    final failedDeletes = remove.length - deleted.length;
     if (mounted) {
       setState(() {
         _freedBytes += freedBytes;
@@ -1106,7 +1111,9 @@ class _LibraryPageState extends State<LibraryPage> {
             listed
                 ? '$total found'
                 : listingFraction == null
-                ? 'Reading folder · $clock'
+                ? (_folderImagesFound > 0
+                      ? '$_folderImagesFound found · $clock'
+                      : 'Reading folder · $clock')
                 : '~${(listingFraction * 100).floor()}% · $clock',
             listed ? 1.0 : listingFraction,
             active: !listed,
@@ -1133,12 +1140,6 @@ class _LibraryPageState extends State<LibraryPage> {
         ],
       ),
     );
-  }
-
-  String _progressLabel(String verb) {
-    final total = _folderImagesTotal;
-    if (total == null) return 'Finding photos…';
-    return '$verb $_folderImagesScanned of $total photos…';
   }
 
   void _showMessage(String message) {
@@ -1443,7 +1444,7 @@ class _LibraryPageState extends State<LibraryPage> {
         const SizedBox(height: 4),
         Text(
           _selectedFolder == null
-              ? '1. Choose a folder   2. Scan it   3. Review and keep your favorites'
+              ? '1. Choose an album   2. Scan it   3. Review and keep your favorites'
               : 'Pick a date range, then find the best shots or exact copies.',
           style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
         ),
@@ -1451,7 +1452,7 @@ class _LibraryPageState extends State<LibraryPage> {
         OutlinedButton.icon(
           onPressed: _scanningFolder || _importing ? null : _chooseFolder,
           icon: const Icon(Icons.folder_open_outlined),
-          label: Text(_selectedFolder?.name ?? 'Choose a folder'),
+          label: Text(_selectedFolder?.name ?? 'Choose an album or folder'),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(44),
             foregroundColor: _green,
@@ -1461,7 +1462,7 @@ class _LibraryPageState extends State<LibraryPage> {
         if (_selectedFolder == null) ...[
           const SizedBox(height: 6),
           const Text(
-            'Tip: choose a folder such as DCIM > Camera or Pictures. Android does not let apps pick all of internal storage, Download, or Android folders.',
+            'Tip: pick an album such as Camera or Screenshots. Use "Other folder…" for anything not listed.',
             style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
           ),
         ],
@@ -1494,7 +1495,23 @@ class _LibraryPageState extends State<LibraryPage> {
           ],
         ),
         const SizedBox(height: 10),
-        FilledButton.icon(
+        if (_scanActive) ...[
+          // The scan buttons turn into the progress while a scan runs.
+          Text(
+            _scanningBestShots ? 'Finding the best shots…' : 'Finding exact duplicates…',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          _scanProgressBar(),
+          Padding(
+            padding: const EdgeInsets.only(top: 7),
+            child: TextButton.icon(
+              onPressed: _cancelRequested ? null : _cancelScan,
+              icon: const Icon(Icons.close, size: 18),
+              label: Text(_cancelRequested ? 'Stopping…' : 'Cancel scan'),
+            ),
+          ),
+        ] else ...[
+          FilledButton.icon(
           onPressed:
               _selectedFolder == null ||
                   _loading ||
@@ -1502,18 +1519,8 @@ class _LibraryPageState extends State<LibraryPage> {
                   _scanningFolder
               ? null
               : _scanBestShotsFolder,
-          icon: _scanActive && _scanningBestShots
-              ? const SizedBox(
-                  width: 17,
-                  height: 17,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.auto_awesome_outlined),
-          label: Text(
-            _scanActive && _scanningBestShots
-                ? _progressLabel('Analyzing')
-                : 'Find the best shots',
-          ),
+          icon: const Icon(Icons.auto_awesome_outlined),
+          label: const Text('Find the best shots'),
           style: FilledButton.styleFrom(
             minimumSize: const Size.fromHeight(44),
             backgroundColor: _green,
@@ -1529,33 +1536,14 @@ class _LibraryPageState extends State<LibraryPage> {
                   _scanningFolder
               ? null
               : _scanFolder,
-          icon: _scanActive && !_scanningBestShots
-              ? const SizedBox(
-                  width: 17,
-                  height: 17,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.copy_all_outlined),
-          label: Text(
-            _scanActive && !_scanningBestShots
-                ? _progressLabel('Scanning')
-                : 'Find exact duplicates',
-          ),
+          icon: const Icon(Icons.copy_all_outlined),
+          label: const Text('Find exact duplicates'),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(44),
             foregroundColor: _green,
           ),
         ),
-        if (_scanActive) _scanProgressBar(),
-        if (_scanActive)
-          Padding(
-            padding: const EdgeInsets.only(top: 7),
-            child: TextButton.icon(
-              onPressed: _cancelRequested ? null : _cancelScan,
-              icon: const Icon(Icons.close, size: 18),
-              label: Text(_cancelRequested ? 'Stopping…' : 'Cancel scan'),
-            ),
-          ),
+        ],
       ],
     ),
   );
@@ -2103,6 +2091,28 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
             ],
           ),
+          Padding(
+            padding: const EdgeInsets.only(left: 26, right: 10, bottom: 4),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.date_range_outlined,
+                  size: 14,
+                  color: Color(0xFF596252),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    scan.rangeDescription,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF596252),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           if (groups > 0)
             Padding(
               padding: const EdgeInsets.only(right: 10),
@@ -2187,7 +2197,7 @@ class _LibraryPageState extends State<LibraryPage> {
       content: SingleChildScrollView(
         child: Text(
           [
-            'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.dateRange.label}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
+            'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.rangeDescription}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
             if (bestShots && scan.duplicateGroups.isNotEmpty)
               _reviewNoteText(scan),
             'Space figures assume you keep only the top pick (or your pick) in each group.',
@@ -2309,7 +2319,7 @@ class _LibraryPageState extends State<LibraryPage> {
     return Tooltip(
       message: preview == null ? 'Preview unavailable' : 'Tap to enlarge',
       child: InkWell(
-        onTap: preview == null ? null : () => _showExactPhotoPreview(photo),
+        onTap: () => _showExactPhotoPreview(photo),
         borderRadius: BorderRadius.circular(8),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
@@ -2338,9 +2348,9 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Shows a photo large. The small scan preview appears at once and is
   /// swapped for a sharper decode of the original as soon as that is ready.
   Future<void> _showExactPhotoPreview(FolderScanPhoto photo) async {
+    // Opens even without a preview: the sharper photo loads inside.
     final preview = photo.previewBytes;
-    if (preview == null) return;
-    var shown = preview;
+    Uint8List? shown = preview;
     var loading = true;
     var started = false;
 
@@ -2380,16 +2390,26 @@ class _LibraryPageState extends State<LibraryPage> {
                     child: Stack(
                       alignment: Alignment.bottomCenter,
                       children: [
-                        InteractiveViewer(
-                          minScale: 1,
-                          maxScale: 6,
-                          child: Image.memory(
-                            shown,
-                            fit: BoxFit.contain,
-                            gaplessPlayback: true,
-                            filterQuality: FilterQuality.high,
-                          ),
-                        ),
+                        if (shown != null)
+                          InteractiveViewer(
+                            minScale: 1,
+                            maxScale: 6,
+                            child: Image.memory(
+                              shown!,
+                              fit: BoxFit.contain,
+                              gaplessPlayback: true,
+                              filterQuality: FilterQuality.high,
+                            ),
+                          )
+                        else if (!loading)
+                          const SizedBox(
+                            height: 160,
+                            child: Center(
+                              child: Text('This photo cannot be shown.'),
+                            ),
+                          )
+                        else
+                          const SizedBox(height: 160),
                         if (loading)
                           const Padding(
                             padding: EdgeInsets.all(8),
@@ -2923,18 +2943,13 @@ class _LibraryPageState extends State<LibraryPage> {
       _scanningFolder = true;
       _scanningBestShots = true;
     });
-    var freedBytes = 0;
-    var failedDeletes = 0;
-    final deleted = <String>{};
-    for (final photo in remove) {
-      try {
-        await _folderScanner.deleteFile(photo.uri);
-        deleted.add(photo.uri);
-        freedBytes += photo.size;
-      } catch (_) {
-        failedDeletes += 1;
-      }
-    }
+    final deleted = await _folderScanner.deleteFiles([
+      for (final photo in remove) photo.uri,
+    ]);
+    final freedBytes = remove
+        .where((photo) => deleted.contains(photo.uri))
+        .fold<int>(0, (total, photo) => total + photo.size);
+    final failedDeletes = remove.length - deleted.length;
     if (mounted) {
       setState(() {
         _freedBytes += freedBytes;
@@ -2978,7 +2993,7 @@ class _LibraryPageState extends State<LibraryPage> {
           fit: StackFit.expand,
           children: [
             GestureDetector(
-              onTap: preview == null ? null : () => _showExactPhotoPreview(photo),
+              onTap: () => _showExactPhotoPreview(photo),
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
@@ -3766,10 +3781,10 @@ String _noGroupsText(FolderScanResult scan, {required bool bestShots}) {
     return 'No image files were found in "${scan.folderName}". Choose the folder that directly holds your photos, for example DCIM > Camera.${_skippedNote(scan.imagesSkipped)}';
   }
   if (scan.imagesScanned == 0 && scan.imagesOutsideDateRange > 0) {
-    return 'Found ${scan.imagesOutsideDateRange} photos in "${scan.folderName}", but none from ${scan.dateRange.label.toLowerCase()}. Tap New scan and choose Last 30 days or Current folder.${_skippedNote(scan.imagesSkipped)}';
+    return 'Found ${scan.imagesOutsideDateRange} photos in "${scan.folderName}", but none from ${scan.rangeDescription}. Tap New scan and choose Last 30 days or Current folder.${_skippedNote(scan.imagesSkipped)}';
   }
   final what = bestShots ? 'No similar shots found.' : 'No exact duplicates found.';
-  return 'Scanned ${scan.imagesScanned} images from ${scan.dateRange.label.toLowerCase()}. $what${_skippedNote(scan.imagesSkipped)}';
+  return 'Scanned ${scan.imagesScanned} images (${scan.rangeDescription}). $what${_skippedNote(scan.imagesSkipped)}';
 }
 
 String _skippedNote(int skipped) => skipped == 0

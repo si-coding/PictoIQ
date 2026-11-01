@@ -1,5 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Lists the phone's photo albums and reads photos for analysis. Photos
+         are processed on the device and never uploaded. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
     <application
+        android:requestLegacyExternalStorage="true"
         android:label="PictoIQ"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

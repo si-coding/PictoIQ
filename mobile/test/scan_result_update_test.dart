@@ -122,4 +122,40 @@ void main() {
     expect(after.imagesScanned, result.imagesScanned);
     expect(result.duplicateGroups, hasLength(2));
   });
+
+  test('describes the date range in words', () {
+    FolderScanResult scan(
+      FolderDateRange range, [
+      DateTime? from,
+      DateTime? to,
+    ]) => FolderScanResult(
+      folderUri: 'content://test',
+      folderName: 'test',
+      imagesScanned: 1,
+      duplicateGroups: const [],
+      bestShotsScan: true,
+      dateRange: range,
+      rangeStart: from,
+      rangeEnd: to,
+    );
+
+    expect(scan(FolderDateRange.currentFolder).rangeDescription, 'All dates');
+    expect(
+      scan(
+        FolderDateRange.custom,
+        DateTime(2026, 10, 3),
+        DateTime(2026, 10, 20),
+      ).rangeDescription,
+      '3 Oct 2026 – 20 Oct 2026',
+    );
+    expect(
+      scan(
+        FolderDateRange.week,
+        DateTime(2026, 10, 25),
+        DateTime(2026, 11, 1),
+      ).rangeDescription,
+      'Last 7 days (25 Oct 2026 – 1 Nov 2026)',
+    );
+    expect(scan(FolderDateRange.today).rangeDescription, 'Today');
+  });
 }

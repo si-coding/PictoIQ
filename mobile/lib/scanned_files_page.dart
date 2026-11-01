@@ -206,7 +206,7 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
         .where((photo) => _groupNumber.containsKey(photo.uri))
         .length;
     final lines = [
-      'Folder: ${scan.folderName} · ${scan.dateRange.label}',
+      'Folder: ${scan.folderName} · ${scan.rangeDescription}',
       'Image files found: ${scan.imageFilesFound}',
       'Scanned: ${scan.imagesScanned}',
       'Left out by the date range: ${scan.imagesOutsideDateRange}',
