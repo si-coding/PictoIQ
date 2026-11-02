@@ -39,6 +39,7 @@ dependencies:
   path_provider: ^2.1.6
   photo_manager: ^3.6.0
   saf: ^2.1.2
+  share_plus: ^11.0.0
   sqflite: ^2.4.4+2
 
 dev_dependencies:

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart' show PhotoManager;
+import 'package:share_plus/share_plus.dart';
 
 import 'album_picker_page.dart';
 import 'app_settings.dart';
@@ -102,6 +103,29 @@ class _LibraryPageState extends State<LibraryPage> {
   bool _showBestResults = true;
   bool _scanActive = false;
   bool _cancelRequested = false;
+
+  /// True when the results on screen come from "Find best moments", which
+  /// keeps the top two photos of each group instead of one.
+  bool _momentsMode = false;
+
+  /// True while best-moments results are on screen. Those only show the top
+  /// two photos of each group and nothing is ever deleted from them.
+  bool get _moments => _momentsMode && _resultsAreBestShots;
+
+  /// The (up to) two photos shown for a best-moments group, best first.
+  List<FolderScanPhoto> _momentPair(FolderDuplicateGroup group) =>
+      group.bestFirst.take(2).toList();
+
+  /// Which of the pair is selected for sharing: the person's choice, or the
+  /// top moment by default.
+  Set<String> _momentSelected(FolderDuplicateGroup group) {
+    final pair = _momentPair(group);
+    final chosen = {
+      for (final photo in pair)
+        if (_photoRatings[photo.uri] == 1) photo.uri,
+    };
+    return chosen.isEmpty ? {pair.first.uri} : chosen;
+  }
   int _folderImagesScanned = 0;
   String? _error;
   String? _folderScanError;
@@ -187,6 +211,63 @@ class _LibraryPageState extends State<LibraryPage> {
     await _runFolderScan(bestShots: true);
   }
 
+  /// The photos kept in each group (one per best shot, two per best moment),
+  /// newest group first, ready to share.
+  List<FolderScanPhoto> _picksToShare(Iterable<FolderDuplicateGroup> groups) {
+    final picks = <FolderScanPhoto>[];
+    for (final group in groups) {
+      final decision = _decisionFor(group, bestShots: true);
+      if (!decision.hasDecision) continue;
+      for (final photo in group.photos) {
+        if (decision.keepIds.contains(photo.uri)) picks.add(photo);
+      }
+    }
+    return picks;
+  }
+
+  /// Opens Android's share sheet with [photos]; WhatsApp (status or chat),
+  /// Instagram and Facebook appear there when they are installed.
+  Future<void> _sharePhotos(List<FolderScanPhoto> photos) async {
+    if (photos.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    // Most apps handle a few dozen photos at a time at best.
+    final batch = photos.take(30).toList();
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Preparing photos to share…')));
+    try {
+      final paths = await _folderScanner.prepareForSharing(batch);
+      messenger.hideCurrentSnackBar();
+      if (paths.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Those photos could not be read.')),
+        );
+        return;
+      }
+      await SharePlus.instance.share(
+        ShareParams(files: [for (final path in paths) XFile(path)]),
+      );
+      if (photos.length > batch.length && mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Shared the first ${batch.length} of ${photos.length} photos.'),
+          ),
+        );
+      }
+    } catch (error) {
+      debugPrint('Share failed: $error');
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Could not open sharing.')));
+    }
+  }
+
+  /// Looser grouping (same people and place, different poses) that keeps the
+  /// top two photos of each group.
+  Future<void> _scanBestMoments() async {
+    await _runFolderScan(bestShots: true, moments: true);
+  }
+
   Future<void> _chooseFolder() async {
     if (_scanningFolder || _importing) return;
     try {
@@ -227,7 +308,10 @@ class _LibraryPageState extends State<LibraryPage> {
     }
   }
 
-  Future<void> _runFolderScan({required bool bestShots}) async {
+  Future<void> _runFolderScan({
+    required bool bestShots,
+    bool moments = false,
+  }) async {
     final selectedFolder = _selectedFolder;
     if (!Platform.isAndroid ||
         selectedFolder == null ||
@@ -238,6 +322,7 @@ class _LibraryPageState extends State<LibraryPage> {
     setState(() {
       _scanningFolder = true;
       _scanningBestShots = bestShots;
+      _momentsMode = bestShots && moments;
       _scanActive = true;
       _cancelRequested = false;
       _showBestResults = bestShots;
@@ -268,11 +353,17 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
         useFaceSignals: _settings.useFaceSignals,
-        thresholds: SimilarityThresholds.forLevel(
-          _settings.matchLevel,
-          splitByPeople: _settings.splitByPeople,
-          timeMode: _settings.timeMode,
-        ),
+        thresholds: moments
+            ? SimilarityThresholds.forLevel(
+                MatchLevel.loose,
+                splitByPeople: true,
+                timeMode: TimeMode.hint,
+              )
+            : SimilarityThresholds.forLevel(
+                _settings.matchLevel,
+                splitByPeople: _settings.splitByPeople,
+                timeMode: _settings.timeMode,
+              ),
         documentMode: _settings.documentMode,
         dateRange: _folderDateRange,
         rangeFrom: _customRange?.start,
@@ -384,6 +475,15 @@ class _LibraryPageState extends State<LibraryPage> {
     FolderDuplicateGroup group, {
     required bool bestShots,
   }) {
+    if (bestShots && _moments) {
+      return KeepDecision(
+        keepIds: _momentSelected(group),
+        isUserChoice: _momentPair(group).any(
+          (photo) => _photoRatings[photo.uri] != null,
+        ),
+        needsReview: false,
+      );
+    }
     if (!bestShots) {
       // Exact copies are identical, so keeping the oldest is always safe.
       return decideKeepers(
@@ -498,7 +598,9 @@ class _LibraryPageState extends State<LibraryPage> {
       tooltip: selected ? 'This photo will be kept' : 'Keep this photo',
       visualDensity: VisualDensity.compact,
       constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-      onPressed: selected ? null : () => _chooseKeeper(group, photo.uri),
+      onPressed: selected && keepIds.length <= 1
+          ? null
+          : () => _chooseKeeper(group, photo.uri),
       icon: Icon(
         selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
         color: selected ? _green : const Color(0xFF77796F),
@@ -1498,7 +1600,11 @@ class _LibraryPageState extends State<LibraryPage> {
         if (_scanActive) ...[
           // The scan buttons turn into the progress while a scan runs.
           Text(
-            _scanningBestShots ? 'Finding the best shots…' : 'Finding exact duplicates…',
+            _scanningBestShots
+                ? (_momentsMode
+                      ? 'Finding the best moments…'
+                      : 'Finding the best shots…')
+                : 'Finding exact duplicates…',
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
           ),
           _scanProgressBar(),
@@ -1528,6 +1634,28 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
         ),
         const SizedBox(height: 7),
+        FilledButton.tonalIcon(
+          onPressed:
+              _selectedFolder == null ||
+                  _loading ||
+                  _importing ||
+                  _scanningFolder
+              ? null
+              : _scanBestMoments,
+          icon: const Icon(Icons.collections_outlined),
+          label: const Text('Find best moments (top 2)'),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(44),
+            foregroundColor: _green,
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.only(top: 4, bottom: 7),
+          child: Text(
+            'Best shot keeps 1 photo from near-identical shots. Best moments keeps the 2 best photos of the same people and place, even in different poses.',
+            style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+          ),
+        ),
         OutlinedButton.icon(
           onPressed:
               _selectedFolder == null ||
@@ -1824,7 +1952,7 @@ class _LibraryPageState extends State<LibraryPage> {
     final error = bestShots ? _bestShotsError : _folderScanError;
     final scanningThisMode = _scanningFolder && _scanningBestShots == bestShots;
     final groupLabel = bestShots
-        ? 'similar-photo groups'
+        ? (_moments ? 'best moments' : 'similar-photo groups')
         : 'exact duplicate groups';
     if (error != null) {
       return Container(
@@ -1844,10 +1972,11 @@ class _LibraryPageState extends State<LibraryPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _resultsHeader(scan, bestShots: bestShots, groupLabel: groupLabel),
-        if (bestShots && scan.duplicateGroups.isNotEmpty) ...[
+        if (bestShots && !_moments && scan.duplicateGroups.isNotEmpty) ...[
           _reviewEntryButton(scan),
         ],
         if (scan.duplicateGroups.isNotEmpty &&
+            !(bestShots && _moments) &&
             (bestShots ||
                 _scanRemovals(scan, bestShots: false).isNotEmpty))
           Padding(
@@ -1943,29 +2072,47 @@ class _LibraryPageState extends State<LibraryPage> {
     for (final group in groups) {
       byEvent.putIfAbsent(eventOf(group), () => []).add(group);
     }
-    final order = byEvent.keys.toList()..sort();
+    // Newest event first; photos with no usable date come last.
+    final dated = [
+      for (final key in byEvent.keys)
+        if (key < events.length && !events[key].isUndated) key,
+    ]..sort((a, b) => b.compareTo(a));
+    final undated = [
+      for (final key in byEvent.keys)
+        if (key >= events.length || events[key].isUndated) key,
+    ]..sort();
+    final order = [...dated, ...undated];
+    int dateOf(FolderDuplicateGroup group) {
+      var newest = 0;
+      for (final photo in group.photos) {
+        final value = trusted(photo) ? photo.capturedAt : photo.modifiedAt;
+        if (value > newest) newest = value;
+      }
+      return newest;
+    }
+
     final hint = Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
         children: [
           const Icon(Icons.touch_app_outlined, size: 16, color: Color(0xFF77796F)),
           const SizedBox(width: 6),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Tap a photo to enlarge it · tap its circle to keep that one',
-              style: TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+              _moments
+                  ? 'Tap a photo to enlarge it · the top moment is selected; tap the circle on the other photo to choose it instead'
+                  : 'Tap a photo to enlarge it · tap its circle to keep that one',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF77796F)),
             ),
           ),
         ],
       ),
     );
-    // Within an event, groups that are safest to clean come first.
+    // Within an event, the newest group comes first.
     for (final list in byEvent.values) {
       list.sort((a, b) {
-        final byConfidence = (a.evidence?.confidence.index ?? 3).compareTo(
-          b.evidence?.confidence.index ?? 3,
-        );
-        return byConfidence != 0 ? byConfidence : a.id.compareTo(b.id);
+        final byDate = dateOf(b).compareTo(dateOf(a));
+        return byDate != 0 ? byDate : a.id.compareTo(b.id);
       });
     }
     return [
@@ -2025,6 +2172,8 @@ class _LibraryPageState extends State<LibraryPage> {
               : _noGroupsText(scan, bestShots: bestShots))
         : !bestShots
         ? 'Exact copies. Review before deleting.'
+        : _moments
+        ? 'Best moments are selected. Nothing is deleted from this list.'
         : ready.isEmpty
         ? 'Nothing is ready for bulk cleanup. Check each group below.'
         : 'Ready now: ${ready.length} photo${ready.length == 1 ? '' : 's'} (${_formatBytes(readyBytes)}) in confident groups.';
@@ -2051,6 +2200,15 @@ class _LibraryPageState extends State<LibraryPage> {
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
+              if (bestShots && groups > 0)
+                IconButton(
+                  tooltip: _moments
+                      ? 'Share all selected moments'
+                      : 'Share all best shots',
+                  onPressed: () => _sharePhotos(_picksToShare(scan.duplicateGroups)),
+                  icon: const Icon(Icons.ios_share_outlined, size: 20),
+                  color: _green,
+                ),
               TextButton(
                 onPressed: _scanningFolder
                     ? null
@@ -2113,7 +2271,19 @@ class _LibraryPageState extends State<LibraryPage> {
               ],
             ),
           ),
-          if (groups > 0)
+          if (groups > 0 && _moments)
+            Padding(
+              padding: const EdgeInsets.only(left: 26, right: 10),
+              child: Text(
+                '$groups $groupLabel',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
+                  color: _green,
+                ),
+              ),
+            )
+          else if (groups > 0)
             Padding(
               padding: const EdgeInsets.only(right: 10),
               child: Row(
@@ -2506,7 +2676,7 @@ class _LibraryPageState extends State<LibraryPage> {
             LayoutBuilder(
               builder: (context, constraints) {
                 final count = group.photos.length;
-                final columns = count >= 9 ? 5 : 4;
+                final columns = _moments ? 2 : (count >= 9 ? 5 : 4);
                 const gap = 8.0;
                 final width = ((constraints.maxWidth - gap * (columns - 1)) /
                         columns)
@@ -2516,7 +2686,9 @@ class _LibraryPageState extends State<LibraryPage> {
                   spacing: gap,
                   runSpacing: gap,
                   children: [
-                    for (final photo in group.bestFirst)
+                    for (final photo in _moments
+                        ? _momentPair(group)
+                        : group.bestFirst)
                       _photoTile(group, photo, keepIds, decision, width),
                   ],
                 );
@@ -2580,40 +2752,61 @@ class _LibraryPageState extends State<LibraryPage> {
   ) {
     // The match tag (Same shot / Similar / Check) is hidden for now; bring it
     // back with _confidenceChip(group.evidence!).
-    final compare = FilledButton.tonalIcon(
+    final compare = IconButton.filledTonal(
+      tooltip: 'Details',
       onPressed: () => _showCompareShots(group),
-      icon: const Icon(Icons.compare_outlined, size: 18),
-      label: const Text('Compare'),
-      style: FilledButton.styleFrom(
-        foregroundColor: _ink,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      ),
+      icon: const Icon(Icons.fact_check_outlined, size: 20),
+      color: _ink,
     );
     final Widget keep;
-    if (!decision.hasDecision) {
+    if (_moments) {
+      // Nothing is deleted from best moments, so there is no keep button.
+      keep = Text(
+        'Selected photo is shared',
+        textAlign: TextAlign.end,
+        style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
+      );
+    } else if (!decision.hasDecision) {
       keep = const Text(
         'Choose the photo to keep.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
       );
     } else {
-      final word = decision.isUserChoice ? 'Keep my pick' : 'Keep best';
+      final word = decision.isUserChoice
+          ? (decision.keepIds.length > 1 ? 'Keep my picks' : 'Keep my pick')
+          : 'Keep best';
       final size =
           'Save ${_formatBytes(_groupRecoveryBytes(group, bestShots: true))}';
-      keep = FilledButton.tonal(
-        onPressed: _scanningFolder ? null : () => _deleteSimilarShots(group),
-        style: FilledButton.styleFrom(
-          foregroundColor: _ink,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text('$word · $size', maxLines: 1),
+      keep = Tooltip(
+        message: '$word, delete the rest',
+        child: FilledButton.tonalIcon(
+          onPressed: _scanningFolder ? null : () => _deleteSimilarShots(group),
+          icon: const Icon(Icons.delete_sweep_outlined, size: 20),
+          label: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(size, maxLines: 1),
+          ),
+          style: FilledButton.styleFrom(
+            foregroundColor: _ink,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          ),
         ),
       );
     }
     return Row(
       children: [
+        if (decision.hasDecision && _resultsAreBestShots) ...[
+          IconButton.filledTonal(
+            tooltip: decision.keepIds.length > 1
+                ? 'Share the kept photos'
+                : 'Share the kept photo',
+            onPressed: () => _sharePhotos(_picksToShare([group])),
+            icon: const Icon(Icons.ios_share_outlined, size: 20),
+            color: _green,
+          ),
+          const SizedBox(width: 8),
+        ],
         compare,
         const SizedBox(width: 8),
         Expanded(child: keep),
@@ -2980,7 +3173,14 @@ class _LibraryPageState extends State<LibraryPage> {
     final small = width < 120;
     final selected = keepIds.contains(photo.uri);
     final preview = photo.previewBytes;
-    final badge = selected
+    final momentRank = _moments
+        ? _momentPair(group).indexWhere((p) => p.uri == photo.uri)
+        : -1;
+    final badge = _moments
+        ? (momentRank == 0
+              ? (width < 90 ? 'BEST' : 'BEST MOMENT')
+              : (width < 90 ? '2ND' : '2ND BEST'))
+        : selected
         ? (width < 90
               ? (decision.isUserChoice ? 'MINE' : 'BEST')
               : (decision.isUserChoice ? 'YOUR PICK' : 'BEST SHOT'))
@@ -3051,7 +3251,9 @@ class _LibraryPageState extends State<LibraryPage> {
               right: 2,
               bottom: 2,
               child: Tooltip(
-                message: selected ? 'This photo will be kept' : 'Keep this photo',
+                message: _moments
+                    ? (selected ? 'Selected for sharing' : 'Select for sharing')
+                    : (selected ? 'This photo will be kept' : 'Keep this photo'),
                 child: InkResponse(
                   onTap: selected
                       ? null
@@ -3114,6 +3316,15 @@ class _LibraryPageState extends State<LibraryPage> {
   /// no marks on the others, so every other photo becomes a removal candidate
   /// only after the user confirms the delete dialog.
   void _chooseKeeper(FolderDuplicateGroup group, String uri) {
+    if (_moments) {
+      // Best moments: exactly one of the two photos is selected for sharing.
+      setState(() {
+        for (final photo in _momentPair(group)) {
+          _photoRatings[photo.uri] = photo.uri == uri ? 1 : 0;
+        }
+      });
+      return;
+    }
     setState(() {
       for (final photo in group.photos) {
         _photoRatings[photo.uri] = photo.uri == uri ? 1 : 0;
@@ -3163,7 +3374,7 @@ class _LibraryPageState extends State<LibraryPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Compare ${group.photos.length} similar photos',
+                  'Details · ${group.photos.length} similar photos',
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,

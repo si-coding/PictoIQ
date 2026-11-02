@@ -70,4 +70,29 @@ void main() {
     expect(decision.hasDecision, isFalse);
     expect(decision.removals(const []), isEmpty);
   });
+
+  test('best moments keep the top two photos the user has not rejected', () {
+    final decision = decideKeepers(
+      rankedIds: ['a', 'b', 'c', 'd'],
+      liked: {},
+      disliked: {'a'},
+      manualOnly: false,
+      confident: true,
+      keepCount: 2,
+    );
+    expect(decision.keepIds, {'b', 'c'});
+    expect(decision.removals(['a', 'b', 'c', 'd']), ['a', 'd']);
+  });
+
+  test('keep count never empties a group', () {
+    final decision = decideKeepers(
+      rankedIds: ['a', 'b'],
+      liked: {},
+      disliked: {'a', 'b'},
+      manualOnly: false,
+      confident: true,
+      keepCount: 2,
+    );
+    expect(decision.keepIds, {'a'});
+  });
 }

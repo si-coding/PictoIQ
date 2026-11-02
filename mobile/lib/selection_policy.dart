@@ -6,9 +6,10 @@
 ///    is chosen automatically for the rest.
 /// 2. If the user prefers to choose for themselves, nothing is kept or
 ///    removed until they mark a photo.
-/// 3. Otherwise the best-ranked photo the user has not rejected is kept. If
-///    the user rejected every photo, the top-ranked one is kept anyway, so a
-///    group can never lose all of its photos.
+/// 3. Otherwise the [keepCount] best-ranked photos the user has not rejected
+///    are kept (one for a best shot, two for best moments). If the user
+///    rejected every photo, the top-ranked one is kept anyway, so a group can
+///    never lose all of its photos.
 ///
 /// A group is [KeepDecision.needsReview] unless the user made the choice or
 /// the grouping and ranking are both trustworthy ([confident]). Bulk actions
@@ -52,6 +53,7 @@ KeepDecision decideKeepers({
   required Set<String> disliked,
   required bool manualOnly,
   required bool confident,
+  int keepCount = 1,
 }) {
   if (rankedIds.isEmpty) {
     return const KeepDecision(
@@ -81,12 +83,12 @@ KeepDecision decideKeepers({
     );
   }
 
-  final keeper = rankedIds.firstWhere(
-    (id) => !disliked.contains(id),
-    orElse: () => rankedIds.first,
-  );
+  final keepers = [
+    for (final id in rankedIds)
+      if (!disliked.contains(id)) id,
+  ].take(keepCount < 1 ? 1 : keepCount).toSet();
   return KeepDecision(
-    keepIds: {keeper},
+    keepIds: keepers.isEmpty ? {rankedIds.first} : keepers,
     isUserChoice: false,
     needsReview: !confident,
   );

@@ -36,7 +36,12 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
   };
 
   late final List<FolderScanPhoto> _photos = [...widget.scan.scannedPhotos]
-    ..sort((a, b) => a.relativePath.compareTo(b.relativePath));
+    ..sort((a, b) {
+      // Newest first.
+      int when(FolderScanPhoto p) => p.capturedAt > 0 ? p.capturedAt : p.modifiedAt;
+      final byDate = when(b).compareTo(when(a));
+      return byDate != 0 ? byDate : a.relativePath.compareTo(b.relativePath);
+    });
 
   List<FolderScanPhoto> get _visible => [
     for (final photo in _photos)

@@ -1,3 +1,4 @@
+import 'dart:io' show Directory, File;
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -8,10 +9,15 @@ import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart'
+    show getTemporaryDirectory;
 import 'package:photo_manager/photo_manager.dart'
     show
         AssetEntity,
         AssetPathEntity,
+        FilterOptionGroup,
+        OrderOption,
+        OrderOptionType,
         PermissionState,
         PhotoManager,
         RequestType,
@@ -490,6 +496,12 @@ class _SourceFile {
   final bool isCandidate;
 }
 
+/// The most recent modified time in [group], for newest-first ordering.
+int _newestModified(FolderDuplicateGroup group) => group.photos.fold(
+  0,
+  (newest, photo) => photo.modifiedAt > newest ? photo.modifiedAt : newest,
+);
+
 /// Runs [_analyzeShot] in a background isolate. A top-level function keeps
 /// the closure's captured state to just these arguments; a closure built
 /// inside the scan loop would drag the scan's callbacks and results into the
@@ -539,6 +551,11 @@ class FolderDuplicateScanner {
       _albumPathsCache = PhotoManager.getAssetPathList(
         type: RequestType.image,
         hasAll: true,
+        // Newest photos first, stated outright rather than left to the
+        // device's default order.
+        filterOption: FilterOptionGroup(
+          orders: [OrderOption(type: OrderOptionType.createDate, asc: false)],
+        ),
       );
     }
     return _albumPathsCache!;
@@ -959,8 +976,8 @@ class FolderDuplicateScanner {
         ),
       );
       duplicates.sort((a, b) {
-        final byName = a.recommended.name.compareTo(b.recommended.name);
-        return byName != 0 ? byName : a.id.compareTo(b.id);
+        final byDate = _newestModified(b).compareTo(_newestModified(a));
+        return byDate != 0 ? byDate : a.id.compareTo(b.id);
       });
     } else {
       final exactGroups = <String, List<FolderScanPhoto>>{};
@@ -975,10 +992,11 @@ class FolderDuplicateScanner {
                   FolderDuplicateGroup(id: entry.key, photos: entry.value),
             ),
       );
+      // Newest photos first.
       duplicates.sort((a, b) {
-        final byName = a.original.name.compareTo(b.original.name);
-        return byName != 0
-            ? byName
+        final byDate = _newestModified(b).compareTo(_newestModified(a));
+        return byDate != 0
+            ? byDate
             : a.original.relativePath.compareTo(b.original.relativePath);
       });
 
@@ -1103,6 +1121,34 @@ class FolderDuplicateScanner {
       debugPrint('Large preview decode failed: $error');
     }
     return _libraryThumbnail(uri, 1600);
+  }
+
+  /// Copies the original files of [photos] into a temporary folder so they
+  /// can be handed to Android's share sheet (WhatsApp status, Instagram,
+  /// Facebook and so on). Photos that cannot be read are skipped. The photos
+  /// themselves are never changed or deleted.
+  Future<List<String>> prepareForSharing(List<FolderScanPhoto> photos) async {
+    final root = await getTemporaryDirectory();
+    final folder = Directory(p.join(root.path, 'pictoiq_share'));
+    try {
+      if (await folder.exists()) await folder.delete(recursive: true);
+    } catch (error) {
+      debugPrint('Could not clear the share folder: $error');
+    }
+    await folder.create(recursive: true);
+    final paths = <String>[];
+    for (var i = 0; i < photos.length; i++) {
+      try {
+        final bytes = await _readAll(photos[i].uri);
+        final name = photos[i].name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+        final file = File(p.join(folder.path, '${i + 1}_$name'));
+        await file.writeAsBytes(bytes, flush: true);
+        paths.add(file.path);
+      } catch (error) {
+        debugPrint('Could not prepare ${photos[i].name} for sharing: $error');
+      }
+    }
+    return paths;
   }
 
   Future<void> dispose() => _faceDetector.close();
