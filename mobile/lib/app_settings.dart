@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import 'moment_selection.dart';
 import 'similarity_grouping.dart' show DocumentMode, MatchLevel, TimeMode;
 
 /// Preferences that outlive one run of the app.
@@ -18,6 +19,14 @@ class AppSettings {
     this.showEvents = true,
     this.timeMode = TimeMode.hint,
     this.documentMode = DocumentMode.leaveOut,
+    this.momentWindow = MomentWindow.activity,
+    this.momentCount = 2,
+    this.momentVariety = MomentVariety.balanced,
+    this.momentPeople = MatchLevel.balanced,
+    this.momentExpression = MomentExpression.balanced,
+    this.momentSeparateTypes = true,
+    this.momentShowScenes = false,
+    this.momentPlace = MomentPlace.off,
   });
 
   /// When true, PictoIQ never picks a similar photo to keep: the user marks
@@ -50,6 +59,31 @@ class AppSettings {
   /// What to do with pages of text and similar document images.
   final DocumentMode documentMode;
 
+  /// Best moments: how far apart in time the photos of one moment may be.
+  final MomentWindow momentWindow;
+
+  /// Best moments: how many photos are shown for each moment (1 to 3).
+  final int momentCount;
+
+  /// Best moments: how different the shown photos should be from each other.
+  final MomentVariety momentVariety;
+
+  /// Best moments: how closely the people (by clothing colour) must match.
+  final MatchLevel momentPeople;
+
+  /// Best moments: whether smiles count more or less.
+  final MomentExpression momentExpression;
+
+  /// Best moments: keep single, couple and group photos in separate moments.
+  final bool momentSeparateTypes;
+
+  /// Best moments: also list moments with no people in them (objects,
+  /// rooms, screenshots). Off by default: they are mostly clutter.
+  final bool momentShowScenes;
+
+  /// Best moments: keep photos taken in different places apart.
+  final MomentPlace momentPlace;
+
   AppSettings copyWith({
     bool? manualSelectionOnly,
     bool? useFaceSignals,
@@ -59,6 +93,14 @@ class AppSettings {
     bool? showEvents,
     TimeMode? timeMode,
     DocumentMode? documentMode,
+    MomentWindow? momentWindow,
+    int? momentCount,
+    MomentVariety? momentVariety,
+    MatchLevel? momentPeople,
+    MomentExpression? momentExpression,
+    bool? momentSeparateTypes,
+    bool? momentShowScenes,
+    MomentPlace? momentPlace,
   }) => AppSettings(
     manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
     useFaceSignals: useFaceSignals ?? this.useFaceSignals,
@@ -68,6 +110,14 @@ class AppSettings {
     showEvents: showEvents ?? this.showEvents,
     timeMode: timeMode ?? this.timeMode,
     documentMode: documentMode ?? this.documentMode,
+    momentWindow: momentWindow ?? this.momentWindow,
+    momentCount: momentCount ?? this.momentCount,
+    momentVariety: momentVariety ?? this.momentVariety,
+    momentPeople: momentPeople ?? this.momentPeople,
+    momentExpression: momentExpression ?? this.momentExpression,
+    momentSeparateTypes: momentSeparateTypes ?? this.momentSeparateTypes,
+    momentShowScenes: momentShowScenes ?? this.momentShowScenes,
+    momentPlace: momentPlace ?? this.momentPlace,
   );
 
   Map<String, Object?> toJson() => {
@@ -79,6 +129,14 @@ class AppSettings {
     'showEvents': showEvents,
     'timeMode': timeMode.name,
     'documentMode': documentMode.name,
+    'momentWindow': momentWindow.name,
+    'momentCount': momentCount,
+    'momentVariety': momentVariety.name,
+    'momentPeople': momentPeople.name,
+    'momentExpression': momentExpression.name,
+    'momentSeparateTypes': momentSeparateTypes,
+    'momentShowScenes': momentShowScenes,
+    'momentPlace': momentPlace.name,
   };
 
   /// Unknown or wrongly typed fields fall back to their defaults.
@@ -92,6 +150,14 @@ class AppSettings {
     final events = json['showEvents'];
     final time = json['timeMode'];
     final documents = json['documentMode'];
+    final window = json['momentWindow'];
+    final count = json['momentCount'];
+    final variety = json['momentVariety'];
+    final momentPeople = json['momentPeople'];
+    final expression = json['momentExpression'];
+    final separateTypes = json['momentSeparateTypes'];
+    final showScenes = json['momentShowScenes'];
+    final place = json['momentPlace'];
     return AppSettings(
       manualSelectionOnly: manual is bool
           ? manual
@@ -112,6 +178,35 @@ class AppSettings {
         (value) => value.name == documents,
         orElse: () => defaults.documentMode,
       ),
+      momentWindow: MomentWindow.values.firstWhere(
+        (value) => value.name == window,
+        orElse: () => defaults.momentWindow,
+      ),
+      momentCount: count is int && count >= 1 && count <= 3
+          ? count
+          : defaults.momentCount,
+      momentVariety: MomentVariety.values.firstWhere(
+        (value) => value.name == variety,
+        orElse: () => defaults.momentVariety,
+      ),
+      momentPeople: MatchLevel.values.firstWhere(
+        (value) => value.name == momentPeople,
+        orElse: () => defaults.momentPeople,
+      ),
+      momentExpression: MomentExpression.values.firstWhere(
+        (value) => value.name == expression,
+        orElse: () => defaults.momentExpression,
+      ),
+      momentSeparateTypes: separateTypes is bool
+          ? separateTypes
+          : defaults.momentSeparateTypes,
+      momentShowScenes: showScenes is bool
+          ? showScenes
+          : defaults.momentShowScenes,
+      momentPlace: MomentPlace.values.firstWhere(
+        (value) => value.name == place,
+        orElse: () => defaults.momentPlace,
+      ),
     );
   }
 
@@ -125,7 +220,15 @@ class AppSettings {
       other.splitByPeople == splitByPeople &&
       other.showEvents == showEvents &&
       other.timeMode == timeMode &&
-      other.documentMode == documentMode;
+      other.documentMode == documentMode &&
+      other.momentWindow == momentWindow &&
+      other.momentCount == momentCount &&
+      other.momentVariety == momentVariety &&
+      other.momentPeople == momentPeople &&
+      other.momentExpression == momentExpression &&
+      other.momentSeparateTypes == momentSeparateTypes &&
+      other.momentShowScenes == momentShowScenes &&
+      other.momentPlace == momentPlace;
 
   @override
   int get hashCode => Object.hash(
@@ -137,6 +240,14 @@ class AppSettings {
     showEvents,
     timeMode,
     documentMode,
+    momentWindow,
+    momentCount,
+    momentVariety,
+    momentPeople,
+    momentExpression,
+    momentSeparateTypes,
+    momentShowScenes,
+    momentPlace,
   );
 }
 

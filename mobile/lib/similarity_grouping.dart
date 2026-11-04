@@ -238,6 +238,47 @@ double layoutDistance(List<double> a, List<double> b) {
   return (date, h * 3600 + m * 60 + sec);
 }
 
+/// Where a photo was taken, as (latitude, longitude) in degrees, from its
+/// EXIF GPS data. Null when the photo has no location (or the system removed
+/// it, which Android does for photos opened through the media library
+/// without location access).
+(double, double)? gpsOf(img.Image image) {
+  try {
+    if (!image.hasExif) return null;
+    final gps = image.exif.gpsIfd;
+    var latitude = gps.gpsLatitude;
+    var longitude = gps.gpsLongitude;
+    if (latitude == null || longitude == null) return null;
+    latitude = latitude.abs();
+    longitude = longitude.abs();
+    if ((gps.gpsLatitudeRef ?? 'N').toUpperCase().startsWith('S')) {
+      latitude = -latitude;
+    }
+    if ((gps.gpsLongitudeRef ?? 'E').toUpperCase().startsWith('W')) {
+      longitude = -longitude;
+    }
+    if (latitude == 0 && longitude == 0) return null;
+    if (latitude.abs() > 90 || longitude.abs() > 180) return null;
+    return (latitude, longitude);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Distance in metres between two points given in degrees (haversine).
+double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+  const radius = 6371000.0;
+  double rad(double degrees) => degrees * math.pi / 180;
+  final dLat = rad(lat2 - lat1);
+  final dLon = rad(lon2 - lon1);
+  final a =
+      math.pow(math.sin(dLat / 2), 2) +
+      math.cos(rad(lat1)) *
+          math.cos(rad(lat2)) *
+          math.pow(math.sin(dLon / 2), 2);
+  return 2 * radius * math.asin(math.min(1.0, math.sqrt(a)));
+}
+
 /// When the photo was taken, as (milliseconds, [CaptureSource]): EXIF capture
 /// time when present; otherwise the file's modified time, unless the file
 /// name shows a different day (a bulk copy or download resets modified times,
@@ -395,6 +436,10 @@ class SimilarityThresholds {
     this.trustedGapMs = 0,
     this.trustedColorDistance = 0.25,
     this.trustedLayoutDistance = 0.16,
+    this.splitShare = 0.5,
+    this.maxLinkGapMs = 0,
+    this.splitComposition = false,
+    this.maxPlaceMeters = 0,
   });
 
   /// Groups photos by what is in them, ignoring when they were taken or
@@ -415,6 +460,46 @@ class SimilarityThresholds {
   /// off they are content-only; otherwise photos must also be close in time. With [splitByPeople]
   /// off, photos are grouped whatever the number of faces in them. All values
   /// are untuned starting points.
+  /// Thresholds for "best moments": the same people at the same place and
+  /// time, even when they moved or changed pose. Photos with a reliable camera
+  /// time within two minutes link on their colours and clothing (not their
+  /// exact framing), and groups are allowed to be looser chains than for best
+  /// shots. All values are untuned starting points.
+  factory SimilarityThresholds.moments({
+    bool splitByPeople = true,
+    int windowMs = 20 * 60 * 1000,
+    int trustedGapMs = 3 * 60 * 1000,
+    MatchLevel people = MatchLevel.balanced,
+    bool splitComposition = true,
+    int placeMeters = 0,
+  }) => SimilarityThresholds(
+        useCaptureTime: false,
+        maxLinkDistance: 12,
+        layoutLinkDistance: 0.14,
+        shiftHashDistance: 24,
+        shiftLayoutDistance: 0.10,
+        highDistance: 4,
+        mediumDistance: 26,
+        mediumLayoutDistance: 0.16,
+        maxFaceCountDifference: splitByPeople ? 2 : 1000,
+        maxSubjectDistance: splitByPeople
+            ? switch (people) {
+                MatchLevel.strict => 0.18,
+                MatchLevel.balanced => 0.25,
+                MatchLevel.loose => 0.32,
+              }
+            : 1.0,
+        histLinkDistance: 0.10,
+        histLayoutDistance: 0.16,
+        trustedGapMs: trustedGapMs,
+        trustedColorDistance: 0.35,
+        trustedLayoutDistance: 0.28,
+        splitShare: 0.25,
+        maxLinkGapMs: windowMs,
+        splitComposition: splitByPeople && splitComposition,
+        maxPlaceMeters: placeMeters,
+      );
+
   factory SimilarityThresholds.forLevel(
     MatchLevel level, {
     bool splitByPeople = true,
@@ -485,8 +570,8 @@ class SimilarityThresholds {
         histLinkDistance: 0.05,
         histLayoutDistance: 0.10,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
-        trustedColorDistance: 0.25,
-        trustedLayoutDistance: 0.16,
+        trustedColorDistance: 0.28,
+        trustedLayoutDistance: 0.20,
       ),
       MatchLevel.loose => SimilarityThresholds(
         useCaptureTime: false,
@@ -532,6 +617,26 @@ class SimilarityThresholds {
   /// ...and their colour layouts by at most this much, so two different
   /// places saved in the same second (an app export, a carousel) do not link.
   final double trustedLayoutDistance;
+
+  /// Content mode: a photo stays in a group only when it is directly alike at
+  /// least this share of the photos already in it. 0.5 keeps groups tight
+  /// (same pose, same spot); a lower value lets a whole scene with changing
+  /// poses stay together.
+  final double splitShare;
+
+  /// Content mode: two photos that both have a reliable camera time never
+  /// link when they were taken further apart than this. 0 turns it off. Keeps
+  /// the same people at the same place on different days (or hours) apart.
+  final int maxLinkGapMs;
+
+  /// Content mode: photos with a different kind of people count (no faces,
+  /// one person, a couple, a group) never link, so a portrait and a family
+  /// photo at the same place are different moments.
+  final bool splitComposition;
+
+  /// Photos with a known location further apart than this (metres) never
+  /// link. 0 turns the check off. Photos without a location are not limited.
+  final int maxPlaceMeters;
 
   /// Content mode, document images: both limits must hold for a link.
   final int documentHashDistance;
@@ -726,7 +831,13 @@ class SimilarityCandidate {
     this.personColors,
     this.isDocument = false,
     this.documentDetail,
+    this.latitude,
+    this.longitude,
   });
+
+  /// Where the photo was taken (degrees), from its EXIF data, or null.
+  final double? latitude;
+  final double? longitude;
 
   /// Colours of the main person's clothing (see [regionHistogram]), or null.
   final List<double>? subjectColors;
@@ -830,10 +941,11 @@ List<SimilarityCluster> clusterSimilar(
           : const SimilarityThresholds().maxLinkDistance;
       final earlierFaces = earlier.faceCount;
       final currentFaces = current.faceCount;
-      if (earlierFaces != null &&
-          currentFaces != null &&
-          (earlierFaces - currentFaces).abs() >=
-              thresholds.maxFaceCountDifference) {
+      if (faceCountsConflict(
+        earlierFaces,
+        currentFaces,
+        thresholds.maxFaceCountDifference,
+      )) {
         continue;
       }
       final distance = hammingDistance(earlier.visualHash, current.visualHash);
@@ -895,6 +1007,25 @@ List<double>? distinctiveColors(List<double> region, List<double> whole) {
 /// someone in the photo with fewer people has no clothing match (within
 /// [limit]) among the people of the other. Extra people in one photo are
 /// fine (a stranger walking by); unknown clothing never conflicts.
+/// Whether two photos are different kinds of people shot: no faces, one
+/// person, a couple, or a group. Unknown counts never conflict.
+bool compositionsConflict(int? a, int? b) {
+  if (a == null || b == null) return false;
+  int kind(int count) => count <= 0 ? 0 : (count >= 3 ? 3 : count);
+  return kind(a) != kind(b);
+}
+
+/// Whether two photos show too different a number of people to be the same
+/// shot. The count must differ by at least [limit], and in a crowd also by at
+/// least 40 % of the larger count, because face detection misses a few faces
+/// in big groups. Unknown counts never conflict.
+bool faceCountsConflict(int? a, int? b, int limit) {
+  if (a == null || b == null) return false;
+  final difference = (a - b).abs();
+  final crowd = (math.max(a, b) * 0.4).ceil();
+  return difference >= math.max(limit, crowd);
+}
+
 bool clothingConflict(
   List<List<double>>? a,
   List<List<double>>? b,
@@ -906,6 +1037,8 @@ bool clothingConflict(
   final fewer = a.length <= b.length ? a : b;
   final more = a.length <= b.length ? b : a;
   final used = <int>{};
+  final allowedMisses = fewer.length >= 4 ? 1 : 0;
+  var misses = 0;
   for (final person in fewer) {
     var best = -1;
     var bestDistance = double.infinity;
@@ -917,7 +1050,14 @@ bool clothingConflict(
         best = i;
       }
     }
-    if (best < 0 || bestDistance > limit) return true;
+    if (best < 0 || bestDistance > limit) {
+      // Clothing boxes overlap in a crowded photo, so with four or more
+      // people one person may fail to match. Three people must all match,
+      // or a trio would join a different group at the same place.
+      misses++;
+      if (misses > allowedMisses) return true;
+      continue;
+    }
     used.add(best);
   }
   return false;
@@ -949,6 +1089,30 @@ List<SimilarityCluster> _clusterByContent(
   bool linkedPair(int i, int j) {
     final current = candidates[order[i]];
       final earlier = candidates[order[j]];
+      // Photos known to be taken far apart are different moments, however
+      // alike they look.
+      if (thresholds.maxLinkGapMs > 0 &&
+          earlier.captureSource == CaptureSource.exif &&
+          current.captureSource == CaptureSource.exif &&
+          (current.capturedAt - earlier.capturedAt).abs() >
+              thresholds.maxLinkGapMs) {
+        return false;
+      }
+      // Photos known to be taken in different places are different moments.
+      if (thresholds.maxPlaceMeters > 0 &&
+          earlier.latitude != null &&
+          earlier.longitude != null &&
+          current.latitude != null &&
+          current.longitude != null &&
+          distanceMeters(
+                earlier.latitude!,
+                earlier.longitude!,
+                current.latitude!,
+                current.longitude!,
+              ) >
+              thresholds.maxPlaceMeters) {
+        return false;
+      }
       final earlierFaces = earlier.faceCount;
       final currentFaces = current.faceCount;
       // The loosest tier (colours only) also wants the same number of people.
@@ -956,10 +1120,15 @@ List<SimilarityCluster> _clusterByContent(
           earlierFaces == null ||
           currentFaces == null ||
           earlierFaces == currentFaces;
-      if (earlierFaces != null &&
-          currentFaces != null &&
-          (earlierFaces - currentFaces).abs() >=
-              thresholds.maxFaceCountDifference) {
+      if (faceCountsConflict(
+        earlierFaces,
+        currentFaces,
+        thresholds.maxFaceCountDifference,
+      )) {
+        return false;
+      }
+      if (thresholds.splitComposition &&
+          compositionsConflict(earlierFaces, currentFaces)) {
         return false;
       }
       final distance = hammingDistance(earlier.visualHash, current.visualHash);
@@ -1061,7 +1230,11 @@ List<SimilarityCluster> _clusterByContent(
   }
   return [
     for (final component in positions.values)
-      for (final group in _splitLooseChain(component, links))
+      for (final group in _splitLooseChain(
+        component,
+        links,
+        thresholds.splitShare,
+      ))
         if (group.length > 1)
           SimilarityCluster(
             members: [for (final position in group) order[position]],
@@ -1077,7 +1250,11 @@ List<SimilarityCluster> _clusterByContent(
 /// group only when it is directly alike at least half of the photos already
 /// in it, so a group is a set of mutually similar shots (same people, same
 /// pose, same spot) rather than a chain.
-List<List<int>> _splitLooseChain(List<int> component, List<Set<int>> links) {
+List<List<int>> _splitLooseChain(
+  List<int> component,
+  List<Set<int>> links,
+  double minShare,
+) {
   if (component.length < 4) return [component];
   final remaining = [...component]
     ..sort((a, b) {
@@ -1093,7 +1270,7 @@ List<List<int>> _splitLooseChain(List<int> component, List<Set<int>> links) {
       for (final candidate in remaining) {
         final shared = group.where(links[candidate].contains).length;
         final share = shared / group.length;
-        if (share >= 0.5 && share > bestShare) {
+        if (share >= minShare && share > bestShare) {
           best = candidate;
           bestShare = share;
         }

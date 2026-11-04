@@ -7,11 +7,12 @@ Edit freely. Keep every claim true.
 **App name:** PictoIQ (max 30 characters)
 
 **Short description (max 80):**
-Find the best shot in a folder of look-alikes and clear exact copies.
+Collect memories, not clutter. Find your best photos and share them.
 
 **Full description (max 4000):**
-Too many near-identical photos? PictoIQ groups similar shots from a folder you choose, suggests the best one, and shows how much space you can free.
+Collect memories, not clutter. PictoIQ looks through an album you choose, finds your best photos and moments, and helps you share them with family and friends or clear out copies.
 
+- Best moments: groups photos into events and moments, then shows the best 1 to 3 of each, picked for quality and variety (not three near-identical shots). Select one and share it to WhatsApp, Instagram or Facebook. Nothing is deleted. Choose how long a moment lasts, how many photos to show, and whether smiles or candid shots count more.
 - Best shot suggestions: compares sharpness, exposure, resolution and faces (eyes open, smiles) and explains the pick.
 - Group by what is in the picture: same scene, same people, similar pose. Not by when a file was copied.
 - You stay in control: tap any photo to enlarge it, pick the one to keep, skip any group, or review one by one.
@@ -19,7 +20,7 @@ Too many near-identical photos? PictoIQ groups similar shots from a folder you c
 - Choose how strict the matching is, and limit a scan to a date range or custom dates.
 - Private by design: your photos are analysed on your phone and never uploaded. No account. No ads.
 
-Photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
+In Best shot and Exact duplicates, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
 
 **Category:** Photography (or Tools). **Tags:** photo cleaner, duplicate photos, best shot.
 

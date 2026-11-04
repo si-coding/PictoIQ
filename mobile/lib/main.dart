@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -12,11 +11,17 @@ import 'app_settings.dart';
 import 'event_grouping.dart';
 import 'folder_duplicate_scanner.dart';
 import 'library_store.dart';
+import 'moment_selection.dart';
 import 'photo_asset.dart';
+import 'photo_viewer_page.dart';
 import 'scanned_files_page.dart';
 import 'selection_policy.dart';
+import 'settings_page.dart';
 import 'shot_ranking.dart' show RankedShot;
 import 'similarity_grouping.dart';
+
+/// What the main scan button on the home screen does.
+enum ScanMode { bestShot, bestMoments, duplicates }
 
 const _ink = Color(0xFF282B25);
 const _green = Color(0xFF54744C);
@@ -67,7 +72,7 @@ class _LibraryPageState extends State<LibraryPage> {
   AppSettings _settings = const AppSettings();
   List<PhotoAsset> _photos = [];
   FolderSelection? _selectedFolder;
-  FolderDateRange _folderDateRange = FolderDateRange.currentFolder;
+  FolderDateRange _folderDateRange = FolderDateRange.week;
 
   /// The from and to dates picked for [FolderDateRange.custom].
   DateTimeRange? _customRange;
@@ -100,12 +105,21 @@ class _LibraryPageState extends State<LibraryPage> {
   _PhotoSort _sort = _PhotoSort.recent;
   final int _tab = 0;
   bool _setupExpanded = true;
+  ScanMode _scanMode = ScanMode.bestShot;
+
+  /// Lets the home screen scroll to the main scan button.
+  final _mainScanKey = GlobalKey();
+  final _scanCancelKey = GlobalKey();
+  final _scrollController = ScrollController();
+
+  /// Whether the home screen is scrolled far enough for a back-to-top button.
+  final ValueNotifier<bool> _showTopButton = ValueNotifier(false);
   bool _showBestResults = true;
   bool _scanActive = false;
   bool _cancelRequested = false;
 
   /// True when the results on screen come from "Find best moments", which
-  /// keeps the top two photos of each group instead of one.
+  /// keeps the top few photos of each group instead of one.
   bool _momentsMode = false;
 
   /// True while best-moments results are on screen. Those only show the top
@@ -113,8 +127,69 @@ class _LibraryPageState extends State<LibraryPage> {
   bool get _moments => _momentsMode && _resultsAreBestShots;
 
   /// The (up to) two photos shown for a best-moments group, best first.
-  List<FolderScanPhoto> _momentPair(FolderDuplicateGroup group) =>
-      group.bestFirst.take(2).toList();
+  final Map<String, List<FolderScanPhoto>> _momentCache = {};
+
+  List<FolderScanPhoto> _momentPair(FolderDuplicateGroup group) {
+    final key =
+        '${group.id}|${group.photos.length}|${_settings.momentCount}|${_settings.momentVariety.name}|${_settings.momentExpression.name}|${_settings.momentPeople.name}';
+    return _momentCache.putIfAbsent(key, () => _chooseMoments(group));
+  }
+
+  /// The photos shown for a moment: the best one first, then others chosen
+  /// to look different from it (see [chooseMomentPhotos]).
+  List<FolderScanPhoto> _chooseMoments(FolderDuplicateGroup group) {
+    final ranked = group.bestFirst;
+    if (ranked.isEmpty) return const [];
+    final candidates = [
+      for (final photo in ranked)
+        MomentPhoto(
+          id: photo.uri,
+          baseScore:
+              (group.ranking?.shotFor(photo.uri)?.score ?? photo.qualityScore) /
+              100,
+          disqualified:
+              group.ranking?.shotFor(photo.uri)?.isDisqualified ?? false,
+          faceCount: photo.features?.faces?.count,
+          smile: photo.features?.faces?.smileAverage,
+          eyesOpen: photo.features?.faces?.eyesOpenMin,
+          edgeCutoff: photo.features?.faces?.edgeCutoff ?? false,
+          visualHash: photo.visualHash,
+          colorLayout: photo.colorLayout,
+          people: photo.features?.faces?.personColors,
+        ),
+    ];
+    final ids = chooseMomentPhotos(
+      candidates,
+      count: _settings.momentCount,
+      variety: _settings.momentVariety,
+      expression: _settings.momentExpression,
+      clothingLimit: switch (_settings.momentPeople) {
+        MatchLevel.strict => 0.2,
+        MatchLevel.balanced => 0.3,
+        MatchLevel.loose => 0.4,
+      },
+    );
+    final byUri = {for (final photo in ranked) photo.uri: photo};
+    return [
+      for (final id in ids)
+        if (byUri[id] != null) byUri[id]!,
+    ];
+  }
+
+  /// A short label for a moment card: what kind of photo it is and how many
+  /// photos it was found in.
+  String _momentCaption(FolderDuplicateGroup group) {
+    final top = group.bestFirst.isEmpty ? null : group.bestFirst.first;
+    final kind = switch (compositionOf(top?.features?.faces?.count)) {
+      Composition.unknown => 'Moment',
+      Composition.noFaces => 'Scene',
+      Composition.single => 'Portrait',
+      Composition.couple => 'Pair',
+      Composition.group => 'Group',
+    };
+    final count = group.photos.length;
+    return '$kind · from $count photos';
+  }
 
   /// Which of the pair is selected for sharing: the person's choice, or the
   /// top moment by default.
@@ -136,6 +211,10 @@ class _LibraryPageState extends State<LibraryPage> {
     super.initState();
     _loadPhotos();
     _loadSettings();
+    _scrollController.addListener(() {
+      final far = _scrollController.hasClients && _scrollController.offset > 700;
+      if (far != _showTopButton.value) _showTopButton.value = far;
+    });
   }
 
   Future<void> _loadSettings() async {
@@ -263,7 +342,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   /// Looser grouping (same people and place, different poses) that keeps the
-  /// top two photos of each group.
+  /// top few photos of each group.
   Future<void> _scanBestMoments() async {
     await _runFolderScan(bestShots: true, moments: true);
   }
@@ -333,12 +412,18 @@ class _LibraryPageState extends State<LibraryPage> {
       _scanStartedAt = DateTime.now();
       _freedBytes = 0;
       _freedPhotos = 0;
-      if (bestShots) {
-        _bestShotsError = null;
-      } else {
-        _folderScanError = null;
-      }
+      // A new scan starts from a clean slate: no results or choices left
+      // over from the previous one.
+      _folderScan = null;
+      _bestShotsScan = null;
+      _folderScanError = null;
+      _bestShotsError = null;
+      _photoRatings.clear();
+      _momentCache.clear();
     });
+    // The progress takes the place of the scan button. Scroll so the whole
+    // scan card, down to Cancel, is on screen before the screen freezes.
+    _scrollToScanCancel();
     _elapsedTimer?.cancel();
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted || !_scanActive || _folderImagesTotal != null) {
@@ -348,16 +433,19 @@ class _LibraryPageState extends State<LibraryPage> {
       }
     });
     try {
-      final result = await _folderScanner.scanUri(
+      final scanned = await _folderScanner.scanUri(
         selectedFolder.uri,
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
         useFaceSignals: _settings.useFaceSignals,
         thresholds: moments
-            ? SimilarityThresholds.forLevel(
-                MatchLevel.loose,
-                splitByPeople: true,
-                timeMode: TimeMode.hint,
+            ? SimilarityThresholds.moments(
+                splitByPeople: _settings.splitByPeople,
+                windowMs: _settings.momentWindow.capMs,
+                trustedGapMs: _settings.momentWindow.trustedMs,
+                people: _settings.momentPeople,
+                splitComposition: _settings.momentSeparateTypes,
+                placeMeters: _settings.momentPlace.meters,
               )
             : SimilarityThresholds.forLevel(
                 _settings.matchLevel,
@@ -392,6 +480,26 @@ class _LibraryPageState extends State<LibraryPage> {
         shouldCancel: () => _cancelRequested,
       );
       if (!mounted) return;
+      // Best moments leaves out groups with no people in them (a plank, a
+      // mattress, a black frame) unless the person asked to see them. Face
+      // detection must have run on every photo, or the group stays.
+      var result = scanned;
+      if (bestShots) {
+        // Black or white frames are never a best photo, and they should not
+        // make a group of their own.
+        result = result.withoutFromGroups({
+          for (final group in result.duplicateGroups)
+            for (final photo in group.photos)
+              if (photo.features?.signals.isBlank ?? false) photo.uri,
+        });
+      }
+      if (moments && !_settings.momentShowScenes) {
+        result = result.withoutGroups({
+          for (final group in result.duplicateGroups)
+            if (group.photos.every((p) => p.features?.faces?.count == 0))
+              group.id,
+        });
+      }
       setState(() {
         _setupExpanded = false;
         if (bestShots) {
@@ -435,6 +543,87 @@ class _LibraryPageState extends State<LibraryPage> {
 
   void _cancelScan() {
     if (_scanActive) setState(() => _cancelRequested = true);
+  }
+
+  /// Back to the scan setup with the previous results cleared, so nothing
+  /// stale is left below. Undo brings them back (for an accidental tap).
+  void _startNewScan() {
+    final folderScan = _folderScan;
+    final bestShotsScan = _bestShotsScan;
+    final ratings = Map<String, int>.of(_photoRatings);
+    final freedBytes = _freedBytes;
+    final freedPhotos = _freedPhotos;
+    setState(() {
+      _folderScan = null;
+      _bestShotsScan = null;
+      _folderScanError = null;
+      _bestShotsError = null;
+      _photoRatings.clear();
+      _freedBytes = 0;
+      _freedPhotos = 0;
+      _setupExpanded = true;
+    });
+    _scrollToFolderSelection();
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    // A snackbar with an action can stay up until swiped away, so close it
+    // ourselves after a few seconds.
+    final undoBar = messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 4),
+          content: const Text('Previous results cleared.'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () {
+              // Only when no new scan has produced results in the meantime.
+              if (!mounted ||
+                  _scanActive ||
+                  _folderScan != null ||
+                  _bestShotsScan != null) {
+                return;
+              }
+              setState(() {
+                _folderScan = folderScan;
+                _bestShotsScan = bestShotsScan;
+                _photoRatings
+                  ..clear()
+                  ..addAll(ratings);
+                _freedBytes = freedBytes;
+                _freedPhotos = freedPhotos;
+                _setupExpanded = false;
+              });
+            },
+          ),
+        ),
+      );
+    Future.delayed(const Duration(seconds: 4), undoBar.close);
+  }
+
+  /// After a tool is chosen, bring the main scan button into view (only
+  /// scrolls when it is off screen).
+  void _scrollToMainScanButton() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _mainScanKey.currentContext;
+      if (!mounted || target == null) return;
+      Scrollable.ensureVisible(
+        target,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  void _scrollToScanCancel() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _scanCancelKey.currentContext;
+      if (!mounted || target == null) return;
+      Scrollable.ensureVisible(
+        target,
+        alignment: 1.0,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
   }
 
   void _scrollToFolderSelection() {
@@ -1129,12 +1318,12 @@ class _LibraryPageState extends State<LibraryPage> {
 
   /// Two bars: step 1 finds the photos (slides until the folder is listed,
   /// then full), step 2 analyses them from 0 to 100 %.
-  Widget _scanProgressBar() {
+  /// The scan button while a scan runs: it fills from left to right and says
+  /// what is happening. Finding photos has a percentage only when the same
+  /// folder was listed before; otherwise it shows a count and a clock.
+  Widget _scanProgressButton() {
     final total = _folderImagesTotal;
     final listed = total != null;
-    // Android hands over a big folder's file list in one piece, so there is
-    // no true percentage for this step. With a previous listing of the same
-    // folder we estimate from its file count or how long it took.
     final folderUri = _selectedFolder?.uri;
     final expectedFiles = folderUri == null ? null : _expectedFiles[folderUri];
     final expectedSeconds = folderUri == null
@@ -1153,93 +1342,60 @@ class _LibraryPageState extends State<LibraryPage> {
     listingFraction = listingFraction?.clamp(0.0, 0.95);
     final clock =
         '${elapsed.inMinutes}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
-    final fraction = total == null || total == 0
-        ? (listed ? 1.0 : 0.0)
-        : (_folderImagesScanned / total).clamp(0.0, 1.0);
-    Widget step(
-      String title,
-      String detail,
-      double? value, {
-      required bool active,
-      required bool done,
-    }) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Icon(
-              done ? Icons.check_circle : Icons.radio_button_unchecked,
-              size: 16,
-              color: done || active ? _green : const Color(0xFFB4B7AC),
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: active || done
-                      ? const Color(0xFF3B4234)
-                      : const Color(0xFF8A8D83),
+
+    final String label;
+    final double? value;
+    if (!listed) {
+      value = listingFraction;
+      label = listingFraction != null
+          ? 'Finding photos… ~${(listingFraction * 100).floor()}%'
+          : _folderImagesFound > 0
+          ? 'Finding photos… $_folderImagesFound found · $clock'
+          : 'Finding photos… $clock';
+    } else {
+      final fraction = total == 0
+          ? 1.0
+          : (_folderImagesScanned / total).clamp(0.0, 1.0);
+      value = fraction;
+      label =
+          'Analyzing photos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total';
+    }
+    return Semantics(
+      label: label,
+      child: ClipRRect(
+        key: _mainScanKey,
+        borderRadius: BorderRadius.circular(26),
+        child: SizedBox(
+          height: 52,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              LinearProgressIndicator(
+                value: value,
+                minHeight: 52,
+                color: const Color(0xFFB9D4B3),
+                backgroundColor: const Color(0xFFE3EEDF),
+              ),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF2F3A2B),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Text(
-              detail,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: value,
-            minHeight: 8,
-            color: _green,
-            backgroundColor: const Color(0xFFDDE8DC),
+            ],
           ),
         ),
-      ],
-    );
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          step(
-            '1. Finding photos',
-            listed
-                ? '$total found'
-                : listingFraction == null
-                ? (_folderImagesFound > 0
-                      ? '$_folderImagesFound found · $clock'
-                      : 'Reading folder · $clock')
-                : '~${(listingFraction * 100).floor()}% · $clock',
-            listed ? 1.0 : listingFraction,
-            active: !listed,
-            done: listed,
-          ),
-          if (!listed && listingFraction == null && elapsed.inSeconds >= 5)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Text(
-                'Big folders are read in one go, so a percentage is not available on the first scan. The next scan of this folder will show one.',
-                style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
-              ),
-            ),
-          const SizedBox(height: 10),
-          step(
-            '2. Analyzing photos',
-            listed
-                ? '${(fraction * 100).floor()}% · $_folderImagesScanned of $total'
-                : 'waiting',
-            fraction,
-            active: listed,
-            done: listed && fraction >= 1.0,
-          ),
-        ],
       ),
     );
   }
@@ -1292,13 +1448,14 @@ class _LibraryPageState extends State<LibraryPage> {
     _elapsedTimer?.cancel();
     _folderScanner.dispose();
     _searchController.dispose();
+    _scrollController.dispose();
+    _showTopButton.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    // The Library tab is hidden for now: no bottom bar, so `_tab` stays 0.
-    // Restore a NavigationBar here to bring it back.
+    // No bottom bar: the Library tab is hidden for now, so `_tab` stays 0.
     body: SafeArea(child: _tab == 0 ? _scanTab() : _libraryTab()),
   );
 
@@ -1323,11 +1480,19 @@ class _LibraryPageState extends State<LibraryPage> {
         !_setupExpanded &&
         !_scanActive &&
         (_folderScan != null || _bestShotsScan != null);
-    return CustomScrollView(
+    final scroll = CustomScrollView(
+      controller: _scrollController,
+      // While a scan runs the screen is frozen; only Cancel works.
+      physics: _scanActive ? const NeverScrollableScrollPhysics() : null,
       slivers: [
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          sliver: SliverToBoxAdapter(child: _header(compact: compactSetup)),
+          sliver: SliverToBoxAdapter(
+            child: IgnorePointer(
+              ignoring: _scanActive,
+              child: _header(compact: compactSetup),
+            ),
+          ),
         ),
         if (Platform.isAndroid)
           SliverPadding(
@@ -1369,7 +1534,10 @@ class _LibraryPageState extends State<LibraryPage> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
             sliver: SliverToBoxAdapter(
-              child: _folderScanSection(bestShots: bestShots),
+              child: IgnorePointer(
+                ignoring: _scanActive,
+                child: _folderScanSection(bestShots: bestShots),
+              ),
             ),
           ),
         if (!Platform.isAndroid)
@@ -1383,7 +1551,50 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          sliver: SliverToBoxAdapter(child: _footer()),
+          sliver: SliverToBoxAdapter(
+            child: IgnorePointer(ignoring: _scanActive, child: _footer()),
+          ),
+        ),
+      ],
+    );
+    return Stack(
+      children: [
+        // A draggable scroll bar for fast scrolling through long results.
+        Scrollbar(
+          controller: _scrollController,
+          interactive: true,
+          thickness: 6,
+          child: scroll,
+        ),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _showTopButton,
+            builder: (context, show, _) => AnimatedSlide(
+              duration: const Duration(milliseconds: 200),
+              offset: show && !_scanActive ? Offset.zero : const Offset(0, 2),
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 200),
+                opacity: show && !_scanActive ? 1 : 0,
+                child: IgnorePointer(
+                  ignoring: !show || _scanActive,
+                  child: FloatingActionButton.small(
+                    heroTag: 'back-to-top',
+                    tooltip: 'Back to top',
+                    backgroundColor: _green,
+                    foregroundColor: Colors.white,
+                    onPressed: () => _scrollController.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 450),
+                      curve: Curves.easeOutCubic,
+                    ),
+                    child: const Icon(Icons.keyboard_arrow_up),
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       ],
     );
@@ -1487,7 +1698,7 @@ class _LibraryPageState extends State<LibraryPage> {
           const Spacer(),
           IconButton(
             tooltip: 'Settings',
-            onPressed: _showSettings,
+            onPressed: _openSettings,
             icon: const Icon(Icons.tune),
           ),
           IconButton(
@@ -1500,7 +1711,7 @@ class _LibraryPageState extends State<LibraryPage> {
       if (!compact) ...[
       const SizedBox(height: 16),
       const Text(
-        'YOUR PERSONAL PHOTO SPACE',
+        'YOUR MEMORIES, MADE SMARTER',
         style: TextStyle(
           color: _green,
           fontSize: 11,
@@ -1509,107 +1720,179 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       ),
       const SizedBox(height: 8),
-      Text(
-        _photos.isEmpty
-            ? 'Your memories,\nin focus.'
-            : 'A calmer camera roll\nstarts here.',
-        style: const TextStyle(
-          fontSize: 26,
-          height: 1.08,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -1.1,
+      // One line: the text shrinks to fit narrow phones.
+      const SizedBox(
+        width: double.infinity,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Collect memories, not clutter.',
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: 28,
+              height: 1.1,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -1.1,
+            ),
+          ),
         ),
       ),
       const SizedBox(height: 8),
       Text(
-        'Find the best photo in a folder of look-alikes, or clear out exact copies. Everything stays on this device.',
+        'Discover your best memories & share with your family and friends.',
         style: TextStyle(color: _ink.withValues(alpha: .66), height: 1.45),
       ),
       ],
     ],
   );
 
-  Widget _folderSelection() => Container(
-    padding: const EdgeInsets.all(15),
+  Widget _folderSelection() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      IgnorePointer(ignoring: _scanActive, child: _tipCard()),
+      const SizedBox(height: 12),
+      _scanCard(),
+      if (_folderScan == null && _bestShotsScan == null && !_scanActive) ...[
+        const SizedBox(height: 14),
+        _inspirationCard(),
+      ],
+    ],
+  );
+
+  Widget _tipCard() => Container(
+    padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: const Color(0xFFEEF3E8),
-      border: Border.all(color: const Color(0xFFDDE7D4)),
-      borderRadius: BorderRadius.circular(14),
+      color: const Color(0xFFE3EEDF),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.lightbulb_outline, size: 20, color: _green),
+        SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            'Pick an album such as Camera. Use "Other folder" for anything not listed.',
+            style: TextStyle(fontSize: 13, height: 1.35, color: Color(0xFF3F4A3A)),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  String get _mainScanLabel => switch (_scanMode) {
+    ScanMode.bestShot => 'Find my best photos',
+    ScanMode.bestMoments => 'Find my best moments',
+    ScanMode.duplicates => 'Find exact duplicates',
+  };
+
+  /// Runs the chosen scan. With no album chosen yet it opens the album picker
+  /// first and then starts, so the button is never a dead end.
+  VoidCallback? get _mainScanAction => _loading || _importing || _scanningFolder
+      ? null
+      : () async {
+          if (_selectedFolder == null) {
+            await _chooseFolder();
+            if (!mounted || _selectedFolder == null) return;
+          }
+          switch (_scanMode) {
+            case ScanMode.bestShot:
+              await _scanBestShotsFolder();
+            case ScanMode.bestMoments:
+              await _scanBestMoments();
+            case ScanMode.duplicates:
+              await _scanFolder();
+          }
+        };
+
+  Widget _scanCard() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: const Color(0xFFE6E8E0)),
+      borderRadius: BorderRadius.circular(16),
     ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          'Scan a folder',
-          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          _selectedFolder == null
-              ? '1. Choose an album   2. Scan it   3. Review and keep your favorites'
-              : 'Pick a date range, then find the best shots or exact copies.',
-          style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-        ),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: _scanningFolder || _importing ? null : _chooseFolder,
-          icon: const Icon(Icons.folder_open_outlined),
-          label: Text(_selectedFolder?.name ?? 'Choose an album or folder'),
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size.fromHeight(44),
-            foregroundColor: _green,
-            alignment: Alignment.centerLeft,
-          ),
-        ),
-        if (_selectedFolder == null) ...[
-          const SizedBox(height: 6),
-          const Text(
-            'Tip: pick an album such as Camera or Screenshots. Use "Other folder…" for anything not listed.',
-            style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
-          ),
-        ],
-        const SizedBox(height: 12),
-        const Text(
-          'Photo date',
-          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 2,
+        // Frozen while a scan runs; only the progress area below is live.
+        IgnorePointer(
+          ignoring: _scanActive,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+        Row(
           children: [
-            for (final range in FolderDateRange.values)
-              ChoiceChip(
-                avatar: range == FolderDateRange.custom
-                    ? const Icon(Icons.date_range_outlined, size: 16)
-                    : null,
-                label: Text(
-                  range == FolderDateRange.custom && _customRange != null
-                      ? '${_formatDate(_customRange!.start)} – ${_formatDate(_customRange!.end)}'
-                      : range.label,
-                ),
-                selected: _folderDateRange == range,
-                onSelected: _scanningFolder
-                    ? null
-                    : (_) => _selectDateRange(range),
-                visualDensity: VisualDensity.compact,
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE3EEDF),
+                borderRadius: BorderRadius.circular(10),
               ),
+              child: const Icon(
+                Icons.center_focus_strong_outlined,
+                color: _green,
+                size: 20,
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Smart photo scan',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
-        const SizedBox(height: 10),
-        if (_scanActive) ...[
-          // The scan buttons turn into the progress while a scan runs.
-          Text(
-            _scanningBestShots
-                ? (_momentsMode
-                      ? 'Finding the best moments…'
-                      : 'Finding the best shots…')
-                : 'Finding exact duplicates…',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        const SizedBox(height: 12),
+        OutlinedButton(
+          onPressed: _scanningFolder || _importing ? null : _chooseFolder,
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size.fromHeight(46),
+            foregroundColor: _ink,
+            side: const BorderSide(color: Color(0xFFCBD0C3)),
           ),
-          _scanProgressBar(),
+          child: Row(
+            children: [
+              const Icon(Icons.folder_open_outlined, size: 20, color: _green),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _selectedFolder?.name ?? 'Choose an album or folder',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const Icon(Icons.expand_more, size: 22),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _dateChips(),
+        const SizedBox(height: 16),
+        const Text(
+          'What would you like to find?',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        _toolsGrid(),
+        const SizedBox(height: 14),
+            ],
+          ),
+        ),
+        if (_scanActive) ...[
+          // The scan button turns into the progress while a scan runs.
+          _scanProgressButton(),
           Padding(
-            padding: const EdgeInsets.only(top: 7),
+            key: _scanCancelKey,
+            padding: const EdgeInsets.only(top: 4),
             child: TextButton.icon(
               onPressed: _cancelRequested ? null : _cancelScan,
               icon: const Icon(Icons.close, size: 18),
@@ -1618,60 +1901,295 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
         ] else ...[
           FilledButton.icon(
-          onPressed:
-              _selectedFolder == null ||
-                  _loading ||
-                  _importing ||
-                  _scanningFolder
-              ? null
-              : _scanBestShotsFolder,
-          icon: const Icon(Icons.auto_awesome_outlined),
-          label: const Text('Find the best shots'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(44),
-            backgroundColor: _green,
-            foregroundColor: Colors.white,
+            key: _mainScanKey,
+            onPressed: _mainScanAction,
+            icon: Icon(
+              _scanMode == ScanMode.duplicates
+                  ? Icons.copy_all_outlined
+                  : Icons.auto_awesome_outlined,
+              size: 20,
+            ),
+            label: Text(_mainScanLabel),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(52),
+              backgroundColor: _green,
+              foregroundColor: Colors.white,
+              textStyle: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
-        ),
-        const SizedBox(height: 7),
-        FilledButton.tonalIcon(
-          onPressed:
-              _selectedFolder == null ||
-                  _loading ||
-                  _importing ||
-                  _scanningFolder
-              ? null
-              : _scanBestMoments,
-          icon: const Icon(Icons.collections_outlined),
-          label: const Text('Find best moments (top 2)'),
-          style: FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(44),
-            foregroundColor: _green,
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.only(top: 4, bottom: 7),
-          child: Text(
-            'Best shot keeps 1 photo from near-identical shots. Best moments keeps the 2 best photos of the same people and place, even in different poses.',
-            style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
-          ),
-        ),
-        OutlinedButton.icon(
-          onPressed:
-              _selectedFolder == null ||
-                  _loading ||
-                  _importing ||
-                  _scanningFolder
-              ? null
-              : _scanFolder,
-          icon: const Icon(Icons.copy_all_outlined),
-          label: const Text('Find exact duplicates'),
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size.fromHeight(44),
-            foregroundColor: _green,
-          ),
-        ),
         ],
+      ],
+    ),
+  );
+
+  /// Short date choices on a single line; a custom range is spelled out
+  /// underneath.
+  Widget _dateChips() {
+    const labels = {
+      FolderDateRange.today: 'Today',
+      FolderDateRange.week: '7 days',
+      FolderDateRange.month: '30 days',
+      FolderDateRange.currentFolder: 'All',
+      FolderDateRange.custom: 'Custom',
+    };
+    final values = FolderDateRange.values;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            for (var i = 0; i < values.length; i++)
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(right: i == values.length - 1 ? 0 : 6),
+                  child: _dateChip(values[i], labels[values[i]] ?? values[i].label),
+                ),
+              ),
+          ],
+        ),
+        if (_folderDateRange == FolderDateRange.custom && _customRange != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '${_formatDate(_customRange!.start)} – ${_formatDate(_customRange!.end)}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _dateChip(FolderDateRange range, String label) {
+    final selected = _folderDateRange == range;
+    return Material(
+      color: selected ? _green : const Color(0xFFF0F1EC),
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: _scanningFolder ? null : () => _selectDateRange(range),
+        child: Container(
+          height: 36,
+          alignment: Alignment.center,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : _ink,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _toolsGrid() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _toolTile(
+                title: 'Best Moments',
+                text: _settings.momentCount == 1
+                    ? 'The best photo of each moment, to share.'
+                    : 'The best ${_settings.momentCount} photos of each moment, to share.',
+                chip: 'On-device AI',
+                icon: Icons.collections_outlined,
+                background: const Color(0xFFE3EEDF),
+                accent: _green,
+                mode: ScanMode.bestMoments,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _toolTile(
+                title: 'Exact Duplicates',
+                text: 'Find identical copies and free space.',
+                chip: 'Smart scan',
+                icon: Icons.copy_all_outlined,
+                background: const Color(0xFFF3E9DD),
+                accent: const Color(0xFF9A6A3A),
+                mode: ScanMode.duplicates,
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 10),
+      IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _toolTile(
+                title: 'Best Shot',
+                text: 'Keep the best photo from similar clicks.',
+                chip: 'On-device AI',
+                icon: Icons.photo_camera_outlined,
+                background: const Color(0xFFE6E7F3),
+                accent: const Color(0xFF5A5F94),
+                mode: ScanMode.bestShot,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _toolTile(
+                title: 'Video Insights',
+                text: 'Discover more from your videos.',
+                chip: 'Coming soon',
+                icon: Icons.videocam_outlined,
+                background: const Color(0xFFF3E4E1),
+                accent: const Color(0xFF9A5A50),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
+  );
+
+  /// One tile of "Explore smart tools". Tapping a tile with a [mode] makes it
+  /// the scan the main button runs (shown by its coloured outline); tiles
+  /// without one are not available yet.
+  Widget _toolTile({
+    required String title,
+    required String text,
+    required IconData icon,
+    required Color background,
+    required Color accent,
+    String? chip,
+    ScanMode? mode,
+  }) {
+    final selected = mode != null && _scanMode == mode;
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _scanActive
+            ? null
+            : mode == null
+            ? () => _showMessage('$title is coming soon.')
+            : () {
+                setState(() => _scanMode = mode);
+                _scrollToMainScanButton();
+              },
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? accent : Colors.transparent,
+              width: 2,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: accent, size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                text,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.3,
+                  color: _ink.withValues(alpha: .66),
+                ),
+              ),
+              const Spacer(),
+              if (chip != null) ...[
+                const SizedBox(height: 8),
+                // Its own line, so the label can wrap instead of being cut.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: .6),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    chip,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: accent,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _inspirationCard() => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      border: Border.all(color: const Color(0xFFE6E8E0)),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: const Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.lightbulb_outline, size: 18, color: Color(0xFFB8860B)),
+            SizedBox(width: 6),
+            Text(
+              'A little inspiration',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        SizedBox(height: 8),
+        Text(
+          '"Keep the best, let the rest go."',
+          style: TextStyle(
+            fontSize: 20,
+            fontStyle: FontStyle.italic,
+            fontWeight: FontWeight.w800,
+            color: _green,
+          ),
+        ),
+        SizedBox(height: 4),
+        Text(
+          'The PictoIQ philosophy',
+          style: TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+        ),
       ],
     ),
   );
@@ -2149,8 +2667,42 @@ class _LibraryPageState extends State<LibraryPage> {
     ),
   );
 
-  /// One compact card for the whole scan result: folder, the space that can
-  /// be freed, and what is ready now. Scan details are one tap away.
+  /// One compact card for the whole scan result, laid out top to bottom:
+  /// folder and date range (with a menu), the headline numbers, any progress
+  /// so far, a one-line status and the actions.
+  /// How many separate events the shown moments belong to (same time-gap
+  /// rule as the event headings).
+  int _momentEventCount(FolderScanResult scan) {
+    final photos = scan.scannedPhotos;
+    bool trusted(FolderScanPhoto photo) =>
+        photo.captureSource == CaptureSource.exif ||
+        photo.captureSource == CaptureSource.day;
+    final events = clusterEvents([
+      for (final photo in photos)
+        EventInput(
+          capturedAt: trusted(photo) ? photo.capturedAt : 0,
+          captureSource: trusted(photo)
+              ? photo.captureSource
+              : CaptureSource.unknown,
+          tieBreaker: photo.relativePath,
+        ),
+    ]);
+    final eventOfUri = <String, int>{
+      for (var e = 0; e < events.length; e++)
+        for (final index in events[e].members) photos[index].uri: e,
+    };
+    final used = <int>{};
+    for (final group in scan.duplicateGroups) {
+      var best = events.length;
+      for (final photo in group.photos) {
+        final e = eventOfUri[photo.uri];
+        if (e != null && e < best) best = e;
+      }
+      used.add(best);
+    }
+    return used.length;
+  }
+
   Widget _resultsHeader(
     FolderScanResult scan, {
     required bool bestShots,
@@ -2178,48 +2730,82 @@ class _LibraryPageState extends State<LibraryPage> {
         ? 'Nothing is ready for bulk cleanup. Check each group below.'
         : 'Ready now: ${ready.length} photo${ready.length == 1 ? '' : 's'} (${_formatBytes(readyBytes)}) in confident groups.';
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(14, 8, 4, 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE8F3E8),
-        border: Border.all(color: const Color(0xFFD2E5D1)),
-        borderRadius: BorderRadius.circular(14),
-      ),
+    Widget stat(String value, String label) => Expanded(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.folder_open_outlined, color: _green, size: 20),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  scan.folderName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: _green,
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
               ),
-              if (bestShots && groups > 0)
-                IconButton(
-                  tooltip: _moments
-                      ? 'Share all selected moments'
-                      : 'Share all best shots',
-                  onPressed: () => _sharePhotos(_picksToShare(scan.duplicateGroups)),
-                  icon: const Icon(Icons.ios_share_outlined, size: 20),
-                  color: _green,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
+          ),
+        ],
+      ),
+    );
+    final divider = Container(
+      width: 1,
+      height: 36,
+      margin: const EdgeInsets.symmetric(horizontal: 12),
+      color: const Color(0xFFCADBC8),
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE8F3E8),
+        border: Border.all(color: const Color(0xFFD2E5D1)),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. Where: folder and date range, with the menu on the right.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.folder_open_outlined, color: _green, size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      scan.folderName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      scan.rangeDescription,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF596252),
+                      ),
+                    ),
+                  ],
                 ),
-              TextButton(
-                onPressed: _scanningFolder
-                    ? null
-                    : () {
-                        setState(() => _setupExpanded = true);
-                        _scrollToFolderSelection();
-                      },
-                child: const Text('New scan'),
               ),
               PopupMenuButton<String>(
                 tooltip: 'More',
+                padding: EdgeInsets.zero,
                 onSelected: (value) {
                   if (value == 'files') {
                     Navigator.of(context).push(
@@ -2231,7 +2817,11 @@ class _LibraryPageState extends State<LibraryPage> {
                       ),
                     );
                   } else {
-                    _showScanDetails(scan, bestShots: bestShots, groupLabel: groupLabel);
+                    _showScanDetails(
+                      scan,
+                      bestShots: bestShots,
+                      groupLabel: groupLabel,
+                    );
                   }
                 },
                 itemBuilder: (_) => [
@@ -2249,107 +2839,94 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
             ],
           ),
-          Padding(
-            padding: const EdgeInsets.only(left: 26, right: 10, bottom: 4),
-            child: Row(
+          // 2. What was found: the headline numbers side by side.
+          if (groups > 0) ...[
+            const SizedBox(height: 14),
+            Row(
+              children: _moments
+                  ? [
+                      stat('${_momentEventCount(scan)}', 'events'),
+                      divider,
+                      stat('$groups', 'moments'),
+                      divider,
+                      stat(
+                        '${scan.duplicateGroups.fold<int>(0, (total, group) => total + _momentPair(group).length)}',
+                        'photos recommended',
+                      ),
+                    ]
+                  : [
+                      stat(_formatBytes(potentialBytes), 'can be freed'),
+                      divider,
+                      stat(
+                        '$groups',
+                        bestShots ? 'similar groups' : 'duplicate groups',
+                      ),
+                    ],
+            ),
+          ],
+          // 3. Progress so far.
+          if (_freedBytes > 0) ...[
+            const SizedBox(height: 12),
+            Row(
               children: [
-                const Icon(
-                  Icons.date_range_outlined,
-                  size: 14,
-                  color: Color(0xFF596252),
-                ),
-                const SizedBox(width: 4),
+                const Icon(Icons.check_circle, color: _green, size: 20),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    scan.rangeDescription,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF596252),
+                    groups == 0
+                        ? '${_formatBytes(_freedBytes)} freed'
+                        : 'Freed so far: ${_formatBytes(_freedBytes)}',
+                    style: TextStyle(
+                      color: _green,
+                      fontWeight: FontWeight.w800,
+                      fontSize: groups == 0 ? 22 : 14,
                     ),
+                  ),
+                ),
+                Text(
+                  '$_freedPhotos photo${_freedPhotos == 1 ? '' : 's'}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF596252),
                   ),
                 ),
               ],
             ),
+          ],
+          // 4. One line saying what to do next.
+          const SizedBox(height: 10),
+          Text(
+            status,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
           ),
-          if (groups > 0 && _moments)
-            Padding(
-              padding: const EdgeInsets.only(left: 26, right: 10),
-              child: Text(
-                '$groups $groupLabel',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: _green,
+          // 5. Actions.
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              if (bestShots && groups > 0) ...[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        _sharePhotos(_picksToShare(scan.duplicateGroups)),
+                    icon: const Icon(Icons.ios_share_outlined, size: 18),
+                    label: Text(_moments ? 'Share moments' : 'Share best'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _green,
+                      side: const BorderSide(color: Color(0xFFB9D4B3)),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: FilledButton.tonalIcon(
+                  onPressed: _scanningFolder ? null : _startNewScan,
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('New scan'),
+                  style: FilledButton.styleFrom(foregroundColor: _ink),
                 ),
               ),
-            )
-          else if (groups > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 10),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Text(
-                    _formatBytes(potentialBytes),
-                    style: const TextStyle(
-                      color: _green,
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  const Expanded(
-                    child: Text(
-                      'can be freed',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF596252)),
-                    ),
-                  ),
-                  Text(
-                    '$groups $groupLabel',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF596252),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (_freedBytes > 0)
-            Padding(
-              padding: const EdgeInsets.only(right: 10, top: 2),
-              child: Row(
-                children: [
-                  const Icon(Icons.check_circle, color: _green, size: 20),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      groups == 0
-                          ? '${_formatBytes(_freedBytes)} freed'
-                          : 'Freed so far: ${_formatBytes(_freedBytes)}',
-                      style: TextStyle(
-                        color: _green,
-                        fontWeight: FontWeight.w800,
-                        fontSize: groups == 0 ? 22 : 13,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    '$_freedPhotos photo${_freedPhotos == 1 ? '' : 's'}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF596252),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.only(right: 10, top: 2),
-            child: Text(
-              status,
-              style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-            ),
+            ],
           ),
         ],
       ),
@@ -2438,7 +3015,7 @@ class _LibraryPageState extends State<LibraryPage> {
                           : const Color(0xFFB37957),
                     ),
                     const SizedBox(width: 8),
-                    _exactDuplicateThumbnail(photo),
+                    _exactDuplicateThumbnail(photo, group.oldestFirst),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -2484,12 +3061,15 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  Widget _exactDuplicateThumbnail(FolderScanPhoto photo) {
+  Widget _exactDuplicateThumbnail(
+    FolderScanPhoto photo,
+    List<FolderScanPhoto> among,
+  ) {
     final preview = photo.previewBytes;
     return Tooltip(
       message: preview == null ? 'Preview unavailable' : 'Tap to enlarge',
       child: InkWell(
-        onTap: () => _showExactPhotoPreview(photo),
+        onTap: () => _showExactPhotoPreview(photo, among: among),
         borderRadius: BorderRadius.circular(8),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
@@ -2515,101 +3095,32 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// Shows a photo large. The small scan preview appears at once and is
-  /// swapped for a sharper decode of the original as soon as that is ready.
-  Future<void> _showExactPhotoPreview(FolderScanPhoto photo) async {
-    // Opens even without a preview: the sharper photo loads inside.
-    final preview = photo.previewBytes;
-    Uint8List? shown = preview;
-    var loading = true;
-    var started = false;
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          if (!started) {
-            started = true;
-            _folderScanner.loadLargePreview(photo.uri).then((bytes) {
-              if (!dialogContext.mounted) return;
-              setDialogState(() {
-                shown = bytes ?? shown;
-                loading = false;
-              });
-            });
-          }
-          return Dialog(
-            insetPadding: const EdgeInsets.all(8),
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    photo.relativePath,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.sizeOf(dialogContext).height * .78,
-                    ),
-                    child: Stack(
-                      alignment: Alignment.bottomCenter,
-                      children: [
-                        if (shown != null)
-                          InteractiveViewer(
-                            minScale: 1,
-                            maxScale: 6,
-                            child: Image.memory(
-                              shown!,
-                              fit: BoxFit.contain,
-                              gaplessPlayback: true,
-                              filterQuality: FilterQuality.high,
-                            ),
-                          )
-                        else if (!loading)
-                          const SizedBox(
-                            height: 160,
-                            child: Center(
-                              child: Text('This photo cannot be shown.'),
-                            ),
-                          )
-                        else
-                          const SizedBox(height: 160),
-                        if (loading)
-                          const Padding(
-                            padding: EdgeInsets.all(8),
-                            child: Chip(
-                              avatar: SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              label: Text('Loading sharper photo…'),
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ),
-                ],
+  /// Opens the full-screen viewer on [photo]. When [among] is given the person
+  /// can swipe to the other photos of the same group.
+  Future<void> _showExactPhotoPreview(
+    FolderScanPhoto photo, {
+    List<FolderScanPhoto>? among,
+  }) {
+    var list = among ?? [photo];
+    var index = list.indexWhere((p) => p.uri == photo.uri);
+    if (index < 0) {
+      list = [photo];
+      index = 0;
+    }
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        fullscreenDialog: true,
+        builder: (_) => PhotoViewerPage(
+          initialIndex: index,
+          photos: [
+            for (final item in list)
+              ViewerPhoto(
+                title: item.relativePath,
+                preview: item.previewBytes,
+                loadLarge: () => _folderScanner.loadLargePreview(item.uri),
               ),
-            ),
-          );
-        },
+          ],
+        ),
       ),
     );
   }
@@ -2673,10 +3184,26 @@ class _LibraryPageState extends State<LibraryPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_moments)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8, right: 28, left: 2),
+                child: Text(
+                  _momentCaption(group),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF596252),
+                  ),
+                ),
+              ),
             LayoutBuilder(
               builder: (context, constraints) {
                 final count = group.photos.length;
-                final columns = _moments ? 2 : (count >= 9 ? 5 : 4);
+                final columns = _moments
+                    ? (_momentPair(group).length < 2
+                          ? 2
+                          : _momentPair(group).length)
+                    : (count >= 9 ? 5 : 4);
                 const gap = 8.0;
                 final width = ((constraints.maxWidth - gap * (columns - 1)) /
                         columns)
@@ -2761,11 +3288,7 @@ class _LibraryPageState extends State<LibraryPage> {
     final Widget keep;
     if (_moments) {
       // Nothing is deleted from best moments, so there is no keep button.
-      keep = Text(
-        'Selected photo is shared',
-        textAlign: TextAlign.end,
-        style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
-      );
+      keep = const SizedBox.shrink();
     } else if (!decision.hasDecision) {
       keep = const Text(
         'Choose the photo to keep.',
@@ -3179,7 +3702,9 @@ class _LibraryPageState extends State<LibraryPage> {
     final badge = _moments
         ? (momentRank == 0
               ? (width < 90 ? 'BEST' : 'BEST MOMENT')
-              : (width < 90 ? '2ND' : '2ND BEST'))
+              : momentRank == 1
+              ? (width < 90 ? '2ND' : '2ND BEST')
+              : (width < 90 ? '3RD' : '3RD BEST'))
         : selected
         ? (width < 90
               ? (decision.isUserChoice ? 'MINE' : 'BEST')
@@ -3193,7 +3718,10 @@ class _LibraryPageState extends State<LibraryPage> {
           fit: StackFit.expand,
           children: [
             GestureDetector(
-              onTap: () => _showExactPhotoPreview(photo),
+              onTap: () => _showExactPhotoPreview(
+                photo,
+                among: _moments ? _momentPair(group) : group.bestFirst,
+              ),
               child: Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
@@ -3789,181 +4317,10 @@ class _LibraryPageState extends State<LibraryPage> {
     ],
   );
 
-  /// Options as wrapping chips, so a label never breaks in the middle of a
-  /// word the way it can in a narrow segmented button.
-  Widget _choiceRow<T>({
-    required List<T> values,
-    required T selected,
-    required String Function(T) label,
-    required ValueChanged<T> onSelected,
-  }) => Align(
-    alignment: Alignment.centerLeft,
-    child: Wrap(
-      spacing: 8,
-      runSpacing: 4,
-      children: [
-        for (final value in values)
-          ChoiceChip(
-            label: Text(label(value)),
-            selected: value == selected,
-            onSelected: (_) => onSelected(value),
-          ),
-      ],
-    ),
-  );
-
-  Future<void> _showSettings() => showDialog<void>(
-    context: context,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (context, setDialogState) => AlertDialog(
-        icon: const Icon(Icons.tune, color: _green),
-        title: const Text('Similar-shot settings'),
-        content: SizedBox(
-          width: 360,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('I choose which photos to keep'),
-                  subtitle: const Text(
-                    'PictoIQ never picks a photo to keep in similar-shot groups. Nothing is selected for deletion until you choose a photo to keep.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  value: _settings.manualSelectionOnly,
-                  onChanged: (value) {
-                    _updateSettings(
-                      _settings.copyWith(manualSelectionOnly: value),
-                    );
-                    setDialogState(() {});
-                  },
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Use faces and eyes when ranking'),
-                  subtitle: const Text(
-                    'Detects faces on this device to prefer open eyes and smiles. Turn off for faster scans that rank on sharpness, lighting and resolution only. Applies to the next scan.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  value: _settings.useFaceSignals,
-                  onChanged: (value) {
-                    _updateSettings(_settings.copyWith(useFaceSignals: value));
-                    setDialogState(() {});
-                  },
-                ),
-                const SizedBox(height: 8),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'How closely photos must match',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                _choiceRow<MatchLevel>(
-                  values: MatchLevel.values,
-                  selected: _settings.matchLevel,
-                  label: (level) => level.label,
-                  onSelected: (level) {
-                    _updateSettings(_settings.copyWith(matchLevel: level));
-                    setDialogState(() {});
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '${_settings.matchLevel.description} Applies to the next scan.',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Also use time taken',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                _choiceRow<TimeMode>(
-                  values: TimeMode.values,
-                  selected: _settings.timeMode,
-                  label: (mode) => mode.label,
-                  onSelected: (mode) {
-                    _updateSettings(_settings.copyWith(timeMode: mode));
-                    setDialogState(() {});
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '${_settings.timeMode.description}${_settings.timeMode == TimeMode.off || _settings.timeMode == TimeMode.hint ? '' : ' Uses camera time, else a date in the file name, else the file date; files that were copied or downloaded can carry misleading dates, and then fewer photos will group.'} Applies to the next scan.',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Documents and screenshots of pages',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                _choiceRow<DocumentMode>(
-                  values: DocumentMode.values,
-                  selected: _settings.documentMode,
-                  label: (mode) => mode.label,
-                  onSelected: (mode) {
-                    _updateSettings(_settings.copyWith(documentMode: mode));
-                    setDialogState(() {});
-                  },
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '${_settings.documentMode.description} Applies to the next scan.',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Keep different people apart'),
-                  subtitle: const Text(
-                    'Keeps photos with different numbers of people, or a main person dressed in clearly different colours, in separate groups. A rough check, not face recognition. Needs "Use faces and eyes" on. Applies to the next scan.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  value: _settings.splitByPeople,
-                  onChanged: (value) {
-                    _updateSettings(_settings.copyWith(splitByPeople: value));
-                    setDialogState(() {});
-                  },
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Show event headings'),
-                  subtitle: const Text(
-                    'Lists groups under a date heading when the camera time or a date in the file name is known. Never affects what is grouped.',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  value: _settings.showEvents,
-                  onChanged: (value) {
-                    _updateSettings(_settings.copyWith(showEvents: value));
-                    setDialogState(() {});
-                  },
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Done'),
-          ),
-        ],
-      ),
+  Future<void> _openSettings() => Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) =>
+          SettingsPage(initial: _settings, onChanged: _updateSettings),
     ),
   );
 
@@ -4007,7 +4364,9 @@ String _formatBytes(int bytes) {
   final kb = bytes / 1024;
   if (kb < 1024) return '${kb.toStringAsFixed(kb >= 10 ? 0 : 1)} KB';
   final mb = kb / 1024;
-  return '${mb.toStringAsFixed(mb >= 10 ? 0 : 1)} MB';
+  if (mb < 1024) return '${mb.toStringAsFixed(mb >= 10 ? 0 : 1)} MB';
+  final gb = mb / 1024;
+  return '${gb.toStringAsFixed(gb >= 100 ? 0 : 1)} GB';
 }
 
 String _sortLabel(_PhotoSort sort) => switch (sort) {

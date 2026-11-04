@@ -41,6 +41,12 @@ class ImageSignals {
   /// Share of pixels that are almost black (0-1).
   final double shadowClip;
 
+  /// A frame that is almost all black or all white (a pocket shot, a lens
+  /// cap, a blown-out frame). Never worth keeping or showing as a best photo.
+  bool get isBlank =>
+      (meanLuma < 20 && shadowClip > 0.85) ||
+      (meanLuma > 238 && highlightClip > 0.85);
+
   /// 0-100. Penalises a mean brightness far from mid-grey and large areas of
   /// pure white or pure black. Highlights count against a photo more than
   /// shadows because blown highlights cannot be recovered.

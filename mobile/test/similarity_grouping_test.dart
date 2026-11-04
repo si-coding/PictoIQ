@@ -829,6 +829,42 @@ void main() {
       );
     });
 
+    test('one mismatched person in a crowd of four or more is tolerated', () {
+      final thresholds = SimilarityThresholds.forLevel(MatchLevel.balanced);
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48), bin(10), bin(20), bin(30)]),
+          crowd('b', [bin(48), bin(10), bin(20), bin(1)]),
+        ], thresholds: thresholds),
+        hasLength(1),
+      );
+      // Two of four changed clothes: not the same people.
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48), bin(10), bin(20), bin(30)]),
+          crowd('b', [bin(48), bin(10), bin(1), bin(2)]),
+        ], thresholds: thresholds),
+        isEmpty,
+      );
+      // A trio has no spare: one changed outfit separates it.
+      expect(
+        clusterSimilar([
+          crowd('a', [bin(48), bin(10), bin(20)]),
+          crowd('b', [bin(48), bin(10), bin(1)]),
+        ], thresholds: thresholds),
+        isEmpty,
+      );
+    });
+
+    test('face counts: crowds tolerate a miss, couples and families differ', () {
+      expect(faceCountsConflict(2, 4, 2), isTrue);
+      expect(faceCountsConflict(2, 3, 2), isFalse);
+      expect(faceCountsConflict(6, 8, 2), isFalse);
+      expect(faceCountsConflict(5, 8, 2), isFalse);
+      expect(faceCountsConflict(2, 6, 2), isTrue);
+      expect(faceCountsConflict(null, 6, 2), isFalse);
+    });
+
     test('a stranger in the background does not split a group', () {
       final thresholds = SimilarityThresholds.forLevel(MatchLevel.balanced);
       expect(
@@ -844,6 +880,25 @@ void main() {
       expect(clothingConflict(null, [bin(1)], 0.18), isFalse);
       expect(clothingConflict([bin(48)], [bin(1)], 1.0), isFalse);
       expect(clothingConflict([bin(48)], [bin(1)], 0.18), isTrue);
+    });
+
+    test('clothingConflict: a trio must match, a crowd may miss one', () {
+      expect(
+        clothingConflict(
+          [bin(1), bin(2), bin(48)],
+          [bin(1), bin(2), bin(3)],
+          0.18,
+        ),
+        isTrue,
+      );
+      expect(
+        clothingConflict(
+          [bin(1), bin(2), bin(3), bin(48)],
+          [bin(1), bin(2), bin(3), bin(4)],
+          0.18,
+        ),
+        isFalse,
+      );
     });
 
     test('shared background colours cancel out of a person\'s clothing', () {
@@ -1053,6 +1108,96 @@ void main() {
         ),
         throwsArgumentError,
       );
+    });
+  });
+
+  group('best moments', () {
+    SimilarityCandidate pose(String name, int hash, int seconds) =>
+        SimilarityCandidate(
+          visualHash: hash,
+          capturedAt: _t0 + seconds * 1000,
+          captureSource: CaptureSource.exif,
+          tieBreaker: name,
+          colorHistogram: [1, for (var i = 1; i < colorHistogramBins; i++) 0],
+          colorLayout: List<double>.filled(12, 0.5),
+        );
+
+    test('the same scene 90 seconds apart groups for moments, not for shots',
+        () {
+      // Very different structure (the people moved), same colours and place.
+      final shots = [pose('a', 0, 0), pose('b', _bits(40), 90)];
+      final shotThresholds = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.hint,
+      );
+      expect(clusterSimilar(shots, thresholds: shotThresholds), isEmpty);
+      expect(
+        _names(
+          shots,
+          clusterSimilar(shots, thresholds: SimilarityThresholds.moments()),
+        ),
+        [
+          ['a', 'b'],
+        ],
+      );
+    });
+
+    test('moments keep groups looser than best shots', () {
+      expect(
+        SimilarityThresholds.moments().splitShare,
+        lessThan(SimilarityThresholds.forLevel(MatchLevel.loose).splitShare),
+      );
+    });
+  });
+
+  group('place', () {
+    SimilarityCandidate at(String name, {double? lat, double? lon}) =>
+        SimilarityCandidate(
+          visualHash: 0,
+          capturedAt: 0,
+          captureSource: CaptureSource.unknown,
+          tieBreaker: name,
+          latitude: lat,
+          longitude: lon,
+        );
+
+    test('distanceMeters is close to the real distance', () {
+      expect(distanceMeters(-41.29, 174.78, -41.29, 174.78), 0);
+      // One degree of latitude is about 111 km.
+      expect(distanceMeters(0, 0, 1, 0), closeTo(111195, 300));
+    });
+
+    test('photos far apart are separate moments only when place is on', () {
+      final shots = [
+        at('a', lat: -41.2900, lon: 174.7800),
+        at('b', lat: -41.2901, lon: 174.7801),
+        at('c', lat: -41.3500, lon: 174.8500),
+      ];
+      final off = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.moments(),
+      );
+      expect(_names(shots, off), [
+        ['a', 'b', 'c'],
+      ]);
+      final on = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.moments(placeMeters: 150),
+      );
+      expect(_names(shots, on), [
+        ['a', 'b'],
+      ]);
+    });
+
+    test('a photo with no location is not limited', () {
+      final shots = [at('a', lat: -41.29, lon: 174.78), at('b')];
+      final clusters = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.moments(placeMeters: 150),
+      );
+      expect(_names(shots, clusters), [
+        ['a', 'b'],
+      ]);
     });
   });
 }

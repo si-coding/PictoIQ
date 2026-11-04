@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pictoiq_mobile/app_settings.dart';
+import 'package:pictoiq_mobile/moment_selection.dart';
 import 'package:pictoiq_mobile/similarity_grouping.dart';
 
 void main() {
@@ -27,6 +28,21 @@ void main() {
     expect(settings.showEvents, isTrue);
     expect(settings.documentMode, DocumentMode.leaveOut);
     expect(settings.timeMode, TimeMode.hint);
+  });
+
+  test('best moments options survive a save', () async {
+    const saved = AppSettings(
+      momentWindow: MomentWindow.outing,
+      momentCount: 3,
+      momentVariety: MomentVariety.strong,
+      momentExpression: MomentExpression.candid,
+      momentPeople: MatchLevel.loose,
+      momentSeparateTypes: false,
+      momentShowScenes: true,
+      momentPlace: MomentPlace.area,
+    );
+    await store.save(saved);
+    expect(await store.load(), saved);
   });
 
   test('matching options survive a save, and bad values fall back', () async {

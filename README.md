@@ -1,124 +1,87 @@
-# PictoIQ
+# PictoIQ mobile
 
-PictoIQ is a privacy-first photo library prototype. It is an ASP.NET Core 9 web app with a local-only browser experience: images are selected explicitly, fingerprints are calculated in the browser, and the catalogue is stored in IndexedDB. The server exposes only the static app and a health endpoint; photo files and fingerprints are not sent to it.
+Local-first Android photo review and best-shot recommendations.
 
-## Run locally
+## Folder scan performance
 
-From the `PictoIQ` directory:
+- Visual-analysis SAF streams use `BytesBuilder` instead of growable integer lists. Exact duplicate SHA-256 is streamed without buffering the entire file.
+- Best-shot analysis does not compute SHA-256. Similar groups use a member URI as their local group ID; exact groups retain the content hash.
+- Decode, orientation normalization, resizing, visual hashing, technical scoring, and JPEG encoding run in `Isolate.run`, one image at a time. Native face detection remains on the plugin's platform channel.
+- JPEG decoding uses subsampling when appropriate. Analysis and ML Kit input images are capped at 1024 pixels on the longest edge, preserving aspect ratio and never upscaling small images.
+- Previews have a maximum edge of 360 pixels for best shots and 480 for exact duplicates. Face detection receives raw pixels (at most 1024 px on the longest edge) directly, with no temporary file.
+- Visual analysis rejects encoded files over 64 MiB, JPEG sources over 67,108,864 pixels, and other formats over 25,165,824 pixels before decoding pixel data. Other formats still require full-frame decoding inside the worker before resizing. These safeguards do not guarantee a particular peak-memory footprint.
+- Failed or unsupported best-shot files increment the existing skipped count and cannot become deletion candidates. Exact duplicates can still be detected by streaming SHA-256 if their previews exceed these limits.
 
-```powershell
-dotnet run
-```
+Downscaling can change quality signals and hide small faces. Recommendations remain advisory; evaluate grouping and ranking against representative burst photos before release.
 
-Open the local URL printed by ASP.NET Core. Use **Choose photos** to select images, then review the library and exact-match groups. The app works best in a modern browser with IndexedDB and Web Crypto support.
-
-Use **Remove from library** on a photo card to remove its saved index entry and current preview from PictoIQ. This does not delete or modify the original photo file.
-
-## Flutter mobile MVP
-
-The native app is in `mobile/`. It can select multiple images with the system photo picker, copy only those selected images to app-private storage, calculate SHA-256 fingerprints on-device, and save the index in SQLite. Exact-match groups are shown in the library. Removing a card deletes PictoIQ's private copy and index entry; the photo in the system gallery is left unchanged.
-
-Run on a connected Android device or emulator from the `mobile` directory:
+### Focused validation
 
 ```powershell
-flutter pub get
-flutter run
+flutter analyze lib\folder_duplicate_scanner.dart lib\scan_image_processing.dart test\scan_image_processing_test.dart test\folder_scanner_performance_test.dart
+flutter test test\scan_image_processing_test.dart test\folder_scanner_performance_test.dart
 ```
 
-The iOS project includes the photo-library usage description, but iOS builds require macOS and have not been verified.
+Tests cover typed byte collection, encoded memory limits, image dimensions, EXIF preservation/orientation, exact hashes, best-shot grouping without content hashes, skipped inputs, temporary-file cleanup, and bounded face-detector input. The native detector is mocked; its real latency and accuracy are not measured here.
 
-The mobile app also offers two separate folder scans: an exact duplicate scan based on SHA-256 and a best-shot scan that groups visually similar photos and ranks them using face, eye, smile, clarity, and lighting signals. Results estimate the space recoverable from suggested removals, and cleanup reports the file sizes successfully removed. Both flows ask for confirmation before deleting selected files.
+For device profiling, run `flutter run --profile` on a physical Android device and compare the same large folder before/after with DevTools CPU, memory, and frame timelines. Record peak memory, scan duration, skipped count, and frames over the device frame budget. Synthetic timings are diagnostics, not device performance guarantees.
 
-The scalable camera, lens, sparkle, and checkmark logo is in `mobile/assets/brand/pictoiq-icon.svg`. On Windows, regenerate the matching Android and iOS launcher PNG sizes with `mobile/tool/generate_app_icons.ps1`.
+## Similar-photo grouping
 
-## Current scope and limitations
+- Similar photos are grouped by a 64-bit difference hash plus capture time (EXIF time when present, file time otherwise; the two are never compared). They are kept separate from exact duplicates and are never described as guaranteed duplicates.
+- Photos taken within 8 seconds of each other are also linked when their colours match (or their hashes differ by up to 14 bits), because small camera movement changes the structure hash a lot while barely changing colours. Such groups are Medium at best, and Low when the colours differ noticeably. If a photo does not belong (for example a different person in the same spot), open Compare and tap "Not the same scene"; nothing is deleted.
+- Capture time comes from EXIF, else the file's modified time. If the file name carries a date (`IMG-20221109-WA0007`, `IMG_20221109_123456`, `PXL_...`) and the modified time is more than two days away from it (bulk copy or download), the name wins. Date-only names (WhatsApp) mean photos from different days never group, and same-day ones need the strict hash match.
+- **Grouping looks at the picture, not the clock.** Files get copied between folders and devices, so file dates say little about a scene. The scan now compares every photo with every other by (1) who is in it, as far as we can tell without face recognition (face counts; a count difference of 2 or more never groups), (2) where it is: a structure hash plus a 6x6 colour layout that captures the background, and only then (3) time, which is used for nothing but event headings. A pair links when the hash is close (10 bits) and the colour layout matches (10%), or when the layout matches very closely (7%) despite shifted framing (hash up to 20). High needs hash <= 4 and layout <= 4%; Low when any pair in the group is far apart. All numbers are untuned: run `tool/evaluate_similarity.dart` on a labelled folder (its last section sweeps them). The old time-window rules are still in the code for the evaluation tool but the scan no longer uses them, and the "same session" setting was removed.
+- **No chains.** Pairwise links are kept, and a group is trimmed so each photo is directly alike at least half of the photos already in it. A beach day of single shots, couples and family poses therefore falls apart into small groups of the same people and pose instead of one 30-photo group. The colour-only match also needs the same number of faces.
+- **Custom date range.** Besides Today / Last 7 days / Last 30 days, "Custom range" asks for a from and to date (both days included). The scan lists the folder first, so progress reads "N of M photos", then analyses three photos at a time. A close button on each similar-photo card skips that group without deleting anything (Undo is offered).
+- **Same people, same clothes.** The clothing colours under each of the four largest faces are compared: everyone in the photo with fewer people must match someone in the other photo (an extra stranger is allowed). Balanced allows a colour distance of 0.18, Strict 0.12, Loose 0.32; these are untuned. Tapping a photo opens the original decoded to about 2048 px (the small scan preview shows first). The scan shows two progress bars: finding photos, then analysing them 0-100 %.
+- **Album picker.** "Choose an album or folder" opens a grid of the phone's albums (cover, name, count); tapping one opens its photos in a scrollable grid (tap a photo to enlarge it) and "Select this album" chooses it read from the media library with the `photo_manager` plugin, so large folders list quickly. It needs the photo permission (READ_MEDIA_IMAGES). "Other folder…" still opens Android's folder picker. Album photos are read through the library and deleted in one batch, so Android asks once. Run `flutter pub get` after copying: a new dependency was added.
+- **Best shot vs best moments.** Best shot keeps one photo from a set of near-identical shots. "Find best moments (top 2)" groups more loosely (same people and place, Loose match, camera-time hint) and shows only the two best photos of each group, with the top one selected; tap the other one's circle to choose it instead (one photo per group). Nothing is deleted from best moments; the selected photos are for sharing. Results are newest first (events, scenes, duplicate groups and the scanned-files list).
+- **Share.** After a best-shot or best-moments scan, the share icon on each group (or in the results header for every group) sends the photos you are keeping to Android's share sheet: WhatsApp status or chat, Instagram, Facebook and others. Originals are copied to a temporary folder for sharing and never changed. Needs `share_plus`: run `flutter pub get`.
+- **Home screen.** "Collect memories, not clutter." with a photo-space card (photo, video and album totals once photo access is granted, plus free phone storage) and one "Smart photo scan" card with three steps: choose what to find (Best Moments, Exact Duplicates, Best Shot tiles), choose an album, pick a short one-line date range, then one main button. Video Insights is shown as coming soon. The selected tile decides what the main button runs. 
+- **Settings (all apply to the next scan).** Match level Strict / Balanced / Loose scales the limits above. "Also use time taken": Ignore, Hint (default: see above), Moment (about 30 s, with the quick-shot colour rule) or Session (10 min, never rated High); time modes use camera time, else a date in the file name, else the file date, so copied files may group less. "Keep different numbers of people apart" turns the face-count rule on or off. "Show event headings" hides or shows the Event > Scene headings.
+- **Moved people, zoom, and the time hint.** Measured on a screenshot of 9 thumbnails, the structure hash changes a lot when people turn or move (28-33 of 64 bits) while the colours barely change. So a pair also links when its position-free colour profile (distance <= 0.03 / 0.05 / 0.08) and colour layout (<= 0.07 / 0.10 / 0.13) match, with a hash up to 32 (Strict / Balanced / Loose). With "Also use time taken: Hint" (default for new installs), two photos whose camera time is reliable (EXIF, or a time in the file name such as `20261004_133012.jpg`; never the file's modified date) and within 10 s also link when their colour profiles are within 0.15 / 0.25 / 0.30. A time written in a file name now beats the modified time. These numbers come from about nine thumbnails: tune them with `tool/evaluate_similarity.dart` on a labelled folder.
+- **Time hint is stricter.** A reliable-time pair (within 10 s) must also have colour layouts within 0.10 / 0.16 / 0.22 (Strict / Balanced / Loose), so two different places saved in the same second (an Instagram or WhatsApp export stamps its own save time in the file name) do not link. Sharpness is now measured on the sharpest quarter of a 6x6 tile grid instead of the whole frame, so a crisp subject with a blurred portrait-mode background is not ranked as soft; a photo that is soft everywhere still is.
+- **Results screen.** One compact header: folder name, New scan, a ⋮ menu (scanned files, about this scan) and a big "X can be freed" figure, the size of every photo that would go if each group kept only its top pick (or your pick), with a one-line status of how much is ready for bulk cleanup. Filter chips scroll in one row. Each group is a photo-first card: large side-by-side thumbnails, the photo to keep outlined in green with a "Best"/"Your pick" badge, short badges on the others ("Softer", "Eyes closed", "Blurry"...), a round button on each photo to keep that one instead (one keeper per group), tap a picture to enlarge it, a one-line title ("3 photos · frees 76 KB"), a neutral status chip (Same shot / Similar / Check), and a short action ("Keep best · free 76 KB"; outlined when the group needs a look). The match notes, ranking headline, file names and per-photo reasons are behind the ⓘ button. Within each event, safer groups come first. Thumbs up/down remain in the Library list only.
+- **Progress and review mode.** The header keeps a running "Freed so far: X MB (N photos)" for the current scan, and shows "X MB freed" with an all-done message when nothing is left. "Review one by one (N)" opens a full-screen review of the groups in the current filter, safest first: big photos, tap the round button to choose the keeper, then "Keep this · free X" or "Skip" (Back undoes the last step). Nothing is deleted while reviewing; at the end one confirmation lists the photos that will go for all the groups you kept. Closing early deletes nothing and keeps your choices on the group cards.
+- **Documents.** Images that are almost all white or grey (pages, receipts, forms) are detected by a simple colour test and, if no face is found in them, treated as documents. Default "Leave out": they are not grouped or offered for deletion, and the scan message says how many were left out. "Compare strictly": they group only with a near-identical copy (hash within 4 bits and a 24x24 brightness grid within 2%), are never rated High, and never link to photos. Untuned; a pale photo (snow, white wall) could be mistaken for a document, which only means it is left alone.
+- **Different people.** The scan cannot recognise faces. As a rough stand-in, "Keep different people apart" compares the colours below the largest face (clothing) between two photos and refuses to group them when they differ by more than 18% / 25% / 40% (Strict / Balanced / Loose), on top of the face-count rule. It only works when face detection is on and a face was found in both photos; two people in similar clothes still group.
+- **Scene and event.** A scene is a group of look-alike photos; ranking and "delete lower-ranked" only work inside a scene, and an unmatched photo is always kept. Event headings (Event > Scene in the results) use only times that describe the picture: camera time (EXIF) or a date in the file name. A file's modified time only says when it was copied, so those photos get no heading. Events never recommend deletion. Not done: events by GPS, and recognising the same people across scenes (needs opt-in on-device face recognition).
+- Each group shows a High, Medium or Low match label with the facts behind it (hash spread, time span, time source). A chain of look-alikes whose ends differ a lot is marked Low.
+- Default selection is conservative: every thumbs-up photo is kept; otherwise the top-ranked photo is suggested. Bulk deletion only touches groups that are High match with a clear top photo, or groups where you chose.
+- Thresholds are starting points. Measure them on your own photos with `dart run tool/evaluate_similarity.dart <folder> <labels.csv>`; `test/similarity_evaluation_test.dart` is a synthetic regression set, not a measurement.
 
-- Both apps analyze only images the user selects or grants through a folder picker. Videos, automatic whole-library enumeration, and cloud accounts are not implemented. Best-shot ranking is an on-device heuristic and can make mistakes; review selections before confirming deletion.
-- Exact matches are determined by SHA-256; files larger than 100 MB are skipped to bound browser memory use.
-- The local browser index stores image names, sizes, dates, and hashes—not image contents. Browser file access expires with the page, so reload the original files to preview them again.
-- Mobile folder cleanup uses Android's document-provider access granted by the user. The app does not scan the entire device gallery.
-- The target architecture in the supplied brief is a Flutter Android/iOS app with a .NET 10 backend added later. This prototype still targets .NET 9; installing .NET 10 does not migrate it or turn it into the native app.
+## Best-shot ranking and review
 
-## Android development environment
+- Within each similar-photo group, photos are ranked on sharpness (Laplacian variance at a fixed 512 px size, compared with the group's sharpest photo), exposure (brightness plus blown highlights and crushed shadows) and resolution. Scores are relative to the group, not an absolute photo rating.
+- When every photo in a group was analysed and a face exists, eye-open and smile signals from ML Kit face detection add up to 30% of the score. They can be switched off in Settings (faster scans, nothing else changes).
+- Compare opens every photo in a group side by side with its score, strengths, concerns and measurements. "Keep this one" records your pick; "Reset my choices" returns the group to PictoIQ's suggestion.
+- "I choose which photos to keep" in Settings stops PictoIQ from selecting anything in similar-photo groups until you give a thumbs-up.
+- A photo is ruled out as a top pick when someone's eyes look closed, a face is cut off at the edge, someone is looking well away from the camera, or it is badly blurred or washed out. Ruled-out photos lose points and are never chosen over a clean photo. Up to three close, clean photos are shown as the Top pick and Finalists, and Compare can show finalists only.
+- "Group photos from the same session" in Settings also groups the same scene taken up to 10 minutes apart with different poses. These groups are labelled "Same session", are never rated High, and are never part of a bulk clean-up. The distance limits are untuned; check them with `tool/evaluate_similarity.dart`.
+- Face signals have not been benchmarked against alternative models. To do that, collect 50+ burst sets with blinks, compare the ranking with and without face signals (Settings switch) against your own pick, and time scans on a mid-range device.
 
-The following tools have been installed on this Windows machine:
+## Home screen
 
-| Tool | Version / location |
-| --- | --- |
-| Flutter | 3.47.7, `C:\Users\rkumar775\develop\flutter` |
-| Dart | 3.13.5, bundled with Flutter |
-| Java | Microsoft OpenJDK 21, `C:\Program Files\Microsoft\jdk-21.0.12.101-hotspot` |
-| Android SDK | `C:\Users\rkumar775\AppData\Local\Android\Sdk` |
-| Android platform | API 36 |
-| Android build tools | 36.0.0 |
-| Android platform tools | Includes `adb` |
-| .NET SDK | 10.0.402, alongside the existing SDKs |
-| Editor | VS Code with the Flutter and Dart extensions |
+- Two tabs: **Scan** (folder, scan buttons, results) and **Library** (photos you imported into PictoIQ and the duplicates among them). Library counters say "saved photos" so they are not confused with folder-scan results.
+- "Find the best shots" is the primary action. After a scan the folder form collapses to one line ("New scan") so results sit near the top. If both scan types have results, a switch shows one at a time.
+- Similar-photo results can be filtered: All, Ready to clean, Needs review.
+- A running scan can be cancelled; cancelling changes nothing. Deleting photos updates the results on screen without scanning the folder again.
 
-Flutter's `bin` and the Android `platform-tools` directory were added to the user PATH. `ANDROID_HOME` was set for the user, and the Java installer configured machine-level `JAVA_HOME`. Flutter was explicitly configured to use these SDK and JDK locations. Restart VS Code and open a new terminal to pick up the environment changes.
+## Getting Started
 
-Verify the setup:
+This project is a starting point for a Flutter application.
 
-```powershell
-flutter --version
-dart --version
-java -version
-adb version
-dotnet --list-sdks
-flutter doctor -v
-flutter devices
-```
+A few resources to get you started if this is your first Flutter project:
 
-The existing web project targets .NET 9. The Flutter Android app has been built and launched in the Android emulator; iOS builds have not been verified.
+- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
+- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
+- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
 
-### Optional Android Studio and emulator
+For help getting started with Flutter development, view the
+[online documentation](https://docs.flutter.dev/), which offers tutorials,
+samples, guidance on mobile development, and a full API reference.
 
-Android Studio's automatic download was stopped after it did not progress. Android builds can use VS Code and the command-line SDK without Android Studio. For its SDK Manager and visual emulator management, install it manually:
 
-```powershell
-winget install --id Google.AndroidStudio --exact --source winget
-```
+## Publishing
 
-Alternatively, download the installer from [Android Studio](https://developer.android.com/studio). Launch it, complete its setup wizard, and point its SDK location at `C:\Users\rkumar775\AppData\Local\Android\Sdk`.
-
-The SDK already contains API 36, build-tools 36.0.0, command-line tools, and platform-tools. Reuse those installations rather than downloading a second SDK.
-
-In **More Actions > SDK Manager**, select API 36 and the SDK tools required by the project. In **Device Manager**, create an Android virtual device and download a matching system image. Enable hardware virtualization in firmware if the emulator requires it. A physical Android phone is an alternative: enable Developer options and USB debugging, connect it, accept the phone's authorization prompt, and confirm it appears in `flutter devices`. Some phones need their manufacturer's Windows USB driver.
-
-### Additional native build dependencies
-
-The first Flutter build downloads Gradle and Maven dependencies and can install the NDK required by its project. Flutter 3.47.7 defaults to NDK `28.2.13676358`. Plugins can require other versions or CMake; install the exact versions requested by the project rather than arbitrary latest versions.
-
-The currently installed Android command-line tools include the new `android.exe` CLI. Its package identifiers use `/`, rather than the older `sdkmanager` semicolon identifiers. For example:
-
-```powershell
-$android = "$env:ANDROID_HOME\cmdline-tools\latest\bin\android.exe"
-& $android --sdk "$env:ANDROID_HOME" sdk install "ndk/28.2.13676358"
-& $android --sdk "$env:ANDROID_HOME" sdk install "cmake/3.22.1"
-```
-
-Use `& $android sdk install --help` and `& $android sdk list --all` to inspect supported commands and packages. Review any new licence prompts. Do not assume an installation succeeded solely from an exit code; confirm the installed files and run `flutter doctor -v`.
-
-### Building the mobile app
-
-Run these commands from `mobile/`:
-
-```powershell
-flutter pub get
-flutter analyze
-flutter test
-flutter run -d <device-id>
-flutter build apk --debug
-```
-
-Store release builds additionally require application IDs, release signing, and secure handling of the signing key. Prefer a short, local, non-OneDrive path for Android development if synchronized folders, long paths, or file locks cause Gradle problems.
-
-### Later cloud and other platform prerequisites
-
-- SQLite on-device support is supplied through the chosen Flutter package; a separate SQLite server is not required.
-- PostgreSQL is needed when implementing the cloud backend, not for the offline Android MVP. Install [PostgreSQL](https://www.postgresql.org/download/windows/) or use a development container when that phase begins.
-- Docker Desktop is optional for containerized PostgreSQL and backend services. Check its licensing and WSL 2/virtualization requirements before installing it.
-- Windows desktop Flutter builds need Visual Studio with **Desktop development with C++**. That workload is not required for Android builds and was not installed.
-- iOS builds require a Mac with Xcode and the current Flutter iOS prerequisites. A signed device/store build also requires Apple signing setup; Windows cannot build the iOS app locally.
-
-Official instructions: [Flutter installation](https://docs.flutter.dev/install/manual), [Flutter Android setup](https://docs.flutter.dev/platform-integration/android/setup).
+See `docs/play-release-checklist.md` (signing, bundle, Play Console steps), `docs/privacy-policy.md` (draft to host publicly) and `docs/play-store-listing.md` (listing text and Data safety draft). Release signing reads `android/key.properties` (see `android/key.properties.example`).

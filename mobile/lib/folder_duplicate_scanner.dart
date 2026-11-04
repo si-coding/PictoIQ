@@ -18,6 +18,7 @@ import 'package:photo_manager/photo_manager.dart'
         FilterOptionGroup,
         OrderOption,
         OrderOptionType,
+        PermissionRequestOption,
         PermissionState,
         PhotoManager,
         RequestType,
@@ -42,7 +43,11 @@ class _ShotAnalysis {
     required this.colorLayout,
     required this.isDocument,
     required this.documentDetail,
+    this.location,
   });
+
+  /// (latitude, longitude) from EXIF, when present.
+  final (double, double)? location;
 
   final int visualHash;
   final (int, int) captureTime;
@@ -86,7 +91,13 @@ class FolderScanPhoto {
     this.colorLayout,
     this.isDocument = false,
     this.documentDetail,
+    this.latitude,
+    this.longitude,
   });
+
+  /// Where the photo was taken (degrees) when its EXIF says so.
+  final double? latitude;
+  final double? longitude;
 
   /// Where [capturedAt] came from. Times from different sources are never
   /// compared with each other, because EXIF stores local wall-clock time while
@@ -146,6 +157,8 @@ class FolderScanPhoto {
     colorLayout: colorLayout,
     isDocument: isDocument,
     documentDetail: documentDetail,
+    latitude: latitude,
+    longitude: longitude,
   );
 
   /// Copy carrying the group-relative score and reasons from [rankShots].
@@ -170,6 +183,8 @@ class FolderScanPhoto {
     colorLayout: colorLayout,
     isDocument: isDocument,
     documentDetail: documentDetail,
+    latitude: latitude,
+    longitude: longitude,
   );
 
   DateTime? get modifiedDate =>
@@ -394,6 +409,57 @@ class FolderScanResult {
       folderName: folderName,
       imagesScanned: imagesScanned,
       duplicateGroups: List.unmodifiable(groups),
+      bestShotsScan: bestShotsScan,
+      dateRange: dateRange,
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
+      imagesSkipped: imagesSkipped,
+      imageFilesFound: imageFilesFound,
+      imagesOutsideDateRange: imagesOutsideDateRange,
+      scannedPhotos: scannedPhotos,
+      skippedNames: skippedNames,
+      documentsLeftOut: documentsLeftOut,
+    );
+  }
+
+  /// This result with the photos in [uris] taken out of their groups (not
+  /// deleted). Groups left with fewer than two photos disappear.
+  FolderScanResult withoutFromGroups(Set<String> uris) {
+    if (uris.isEmpty) return this;
+    final groups = <FolderDuplicateGroup>[];
+    for (final group in duplicateGroups) {
+      final updated = group.without(uris);
+      if (updated != null) groups.add(updated);
+    }
+    return FolderScanResult(
+      folderUri: folderUri,
+      folderName: folderName,
+      imagesScanned: imagesScanned,
+      duplicateGroups: List.unmodifiable(groups),
+      bestShotsScan: bestShotsScan,
+      dateRange: dateRange,
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
+      imagesSkipped: imagesSkipped,
+      imageFilesFound: imageFilesFound,
+      imagesOutsideDateRange: imagesOutsideDateRange,
+      scannedPhotos: scannedPhotos,
+      skippedNames: skippedNames,
+      documentsLeftOut: documentsLeftOut,
+    );
+  }
+
+  /// This result without the groups in [groupIds] (set aside, not deleted).
+  FolderScanResult withoutGroups(Set<String> groupIds) {
+    if (groupIds.isEmpty) return this;
+    return FolderScanResult(
+      folderUri: folderUri,
+      folderName: folderName,
+      imagesScanned: imagesScanned,
+      duplicateGroups: List.unmodifiable([
+        for (final group in duplicateGroups)
+          if (!groupIds.contains(group.id)) group,
+      ]),
       bestShotsScan: bestShotsScan,
       dateRange: dateRange,
       rangeStart: rangeStart,
@@ -930,6 +996,8 @@ class FolderDuplicateScanner {
           colorLayout: analysis?.colorLayout,
           isDocument: analysis?.isDocument ?? false,
           documentDetail: analysis?.documentDetail,
+          latitude: analysis?.location?.$1,
+          longitude: analysis?.location?.$2,
         );
         images.add(photo);
         imagesScanned += 1;
@@ -1151,6 +1219,31 @@ class FolderDuplicateScanner {
     return paths;
   }
 
+  /// Photo, video and album totals for the home screen. Never asks for
+  /// permission: returns null unless photo access was already granted.
+  Future<({int photos, int videos, int albums})?> librarySnapshot() async {
+    try {
+      final state = await PhotoManager.getPermissionState(
+        requestOption: const PermissionRequestOption(),
+      );
+      if (state != PermissionState.authorized &&
+          state != PermissionState.limited) {
+        return null;
+      }
+      final photos = await PhotoManager.getAssetCount(type: RequestType.image);
+      final videos = await PhotoManager.getAssetCount(type: RequestType.video);
+      final paths = await _albumPaths();
+      return (
+        photos: photos,
+        videos: videos,
+        albums: paths.where((path) => !path.isAll).length,
+      );
+    } catch (error) {
+      debugPrint('Library totals unavailable: $error');
+      return null;
+    }
+  }
+
   Future<void> dispose() => _faceDetector.close();
 
   /// Runs face detection on one analysis image. Returns null when detection
@@ -1289,6 +1382,7 @@ class FolderDuplicateScanner {
       colorLayout: colorLayout(decoded),
       isDocument: isDocument,
       documentDetail: isDocument ? documentDetail(decoded) : null,
+      location: gpsOf(decoded),
     );
   }
 
@@ -1318,6 +1412,8 @@ class FolderDuplicateScanner {
             personColors: photo.features?.faces?.personColors,
             isDocument: photo.isDocumentLike,
             documentDetail: photo.documentDetail,
+            latitude: photo.latitude,
+            longitude: photo.longitude,
           ),
       ],
       thresholds: thresholds,
