@@ -6,22 +6,29 @@ import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart' show PhotoManager;
 import 'package:share_plus/share_plus.dart';
 
-import 'album_picker_page.dart';
-import 'app_settings.dart';
-import 'event_grouping.dart';
-import 'folder_duplicate_scanner.dart';
-import 'library_store.dart';
-import 'moment_selection.dart';
-import 'photo_asset.dart';
-import 'photo_viewer_page.dart';
-import 'scanned_files_page.dart';
-import 'selection_policy.dart';
-import 'settings_page.dart';
-import 'shot_ranking.dart' show RankedShot;
-import 'similarity_grouping.dart';
+import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
+import 'package:pictoiq_mobile/features/photos/clutter/clutter_page.dart';
+import 'package:pictoiq_mobile/features/photos/library/album_picker_page.dart';
+import 'package:pictoiq_mobile/features/settings/app_settings.dart';
+import 'package:pictoiq_mobile/shared/event_grouping.dart';
+import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/core/database/database_service.dart';
+import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
+import 'package:pictoiq_mobile/core/media/media_asset.dart';
+import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart';
+import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
+import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
+import 'package:pictoiq_mobile/features/settings/settings_page.dart';
+import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
+import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates_page.dart';
+import 'package:pictoiq_mobile/shared/shot_ranking.dart' show RankedShot;
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 /// What the main scan button on the home screen does.
-enum ScanMode { bestShot, bestMoments, duplicates }
+enum ScanMode { bestShot, bestMoments, duplicates, clutter }
+
+/// The tools offered on the Videos tab (not available yet).
+enum VideoTool { exactDuplicates, similarVideos, bestMoments, enhance }
 
 const _ink = Color(0xFF282B25);
 const _green = Color(0xFF54744C);
@@ -61,6 +68,14 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   final _picker = ImagePicker();
   final _folderScanner = FolderDuplicateScanner();
+  final _videoScanner = VideoDuplicateScanner();
+
+  /// The video album chosen on the Videos tab.
+  VideoAlbum? _selectedVideoAlbum;
+
+  /// True while the exact-duplicate video scan runs (changes the wording of
+  /// the progress).
+  bool _scanningVideos = false;
   final _settingsStore = SettingsStore();
   final _searchController = TextEditingController();
   final _folderSelectionKey = GlobalKey();
@@ -106,6 +121,10 @@ class _LibraryPageState extends State<LibraryPage> {
   final int _tab = 0;
   bool _setupExpanded = true;
   ScanMode _scanMode = ScanMode.bestShot;
+
+  /// Whether the home screen shows the Videos tab instead of Photos.
+  bool _videoMode = false;
+  VideoTool _videoTool = VideoTool.exactDuplicates;
 
   /// Lets the home screen scroll to the main scan button.
   final _mainScanKey = GlobalKey();
@@ -347,6 +366,171 @@ class _LibraryPageState extends State<LibraryPage> {
     await _runFolderScan(bestShots: true, moments: true);
   }
 
+  /// Looks for screenshots, documents, blank, blurry and tiny photos and
+  /// opens a review screen. Nothing is deleted without confirmation.
+  Future<void> _scanClutter() async {
+    await _runFolderScan(bestShots: true, clutter: true);
+  }
+
+  Future<void> _showClutter(FolderScanResult scan) async {
+    final items = findClutter(scan.scannedPhotos);
+    if (items.isEmpty) {
+      _showMessage(
+        'No clutter found in ${scan.folderName}. '
+        '${scan.imagesScanned} photo${scan.imagesScanned == 1 ? '' : 's'} checked.'
+        '${_skippedNote(scan.imagesSkipped)}',
+      );
+      return;
+    }
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ClutterPage(
+          items: items,
+          folderName: scan.folderName,
+          rangeDescription: scan.rangeDescription,
+          imagesSkipped: scan.imagesSkipped,
+          deleteFiles: _folderScanner.deleteFiles,
+        ),
+      ),
+    );
+  }
+
+  /// Lists the phone's video albums in a sheet and remembers the choice.
+  Future<void> _chooseVideoAlbum() async {
+    if (_scanningFolder || _importing) return;
+    try {
+      if (!await _videoScanner.requestAccess()) {
+        _showMessage(
+          'PictoIQ needs permission to see your videos. Allow it in the phone settings.',
+        );
+        return;
+      }
+      final albums = await _videoScanner.listAlbums();
+      if (!mounted) return;
+      if (albums.isEmpty) {
+        _showMessage('No videos were found on this phone.');
+        return;
+      }
+      final chosen = await showModalBottomSheet<VideoAlbum>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        builder: (sheetContext) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final album in albums)
+                ListTile(
+                  leading: const Icon(Icons.video_library_outlined),
+                  title: Text(album.name),
+                  subtitle: Text(
+                    '${album.count} video${album.count == 1 ? '' : 's'}',
+                  ),
+                  onTap: () => Navigator.pop(sheetContext, album),
+                ),
+            ],
+          ),
+        ),
+      );
+      if (chosen != null && mounted) {
+        setState(() => _selectedVideoAlbum = chosen);
+        _scrollToMainScanButton();
+      }
+    } catch (error) {
+      debugPrint('Video albums unavailable: ${error.runtimeType}');
+      if (mounted) _showMessage('Could not list your video albums.');
+    }
+  }
+
+  /// Finds videos with identical content in the chosen album and opens a
+  /// review screen. Nothing is deleted without confirmation.
+  Future<void> _scanVideoDuplicates() async {
+    final album = _selectedVideoAlbum;
+    if (album == null || _scanningFolder || _importing) return;
+    setState(() {
+      _scanningFolder = true;
+      _scanningVideos = true;
+      _scanActive = true;
+      _cancelRequested = false;
+      _folderImagesScanned = 0;
+      _folderImagesTotal = null;
+      _folderImagesFound = 0;
+      _folderFilesChecked = 0;
+      _scanStartedAt = DateTime.now();
+    });
+    _scrollToScanCancel();
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || !_scanActive || _folderImagesTotal != null) {
+        timer.cancel();
+      } else {
+        setState(() {});
+      }
+    });
+    VideoScanResult? result;
+    try {
+      result = await _videoScanner.scan(
+        album,
+        dateRange: _folderDateRange,
+        rangeFrom: _customRange?.start,
+        rangeTo: _customRange?.end,
+        onListed: (found) {
+          if (mounted) setState(() => _folderImagesFound = found);
+        },
+        onTotal: (total) {
+          if (mounted) setState(() => _folderImagesTotal = total);
+        },
+        onProgress: (count) {
+          if (mounted) setState(() => _folderImagesScanned = count);
+        },
+        shouldCancel: () => _cancelRequested,
+      );
+    } on ScanCancelled {
+      if (mounted) _showMessage('Scan cancelled. Nothing was changed.');
+    } catch (error) {
+      debugPrint('Video scan failed: ${error.runtimeType}');
+      if (mounted) {
+        _showMessage(
+          'PictoIQ could not scan those videos. Try again or choose another album.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _scanningFolder = false;
+          _scanningVideos = false;
+          _scanActive = false;
+        });
+      }
+    }
+    final done = result;
+    if (done != null && mounted) await _showVideoDuplicates(done);
+  }
+
+  Future<void> _showVideoDuplicates(VideoScanResult scan) async {
+    if (scan.groups.isEmpty) {
+      _showMessage(
+        'No exact duplicate videos found in ${scan.albumName}. '
+        '${scan.videosFound} video${scan.videosFound == 1 ? '' : 's'} checked.'
+        '${scan.videosUnreadable == 0 ? '' : ' ${scan.videosUnreadable} could not be read.'}',
+      );
+      return;
+    }
+    final range =
+        _folderDateRange == FolderDateRange.custom && _customRange != null
+        ? '${_formatDate(_customRange!.start)} – ${_formatDate(_customRange!.end)}'
+        : _folderDateRange.label;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => VideoDuplicatesPage(
+          result: scan,
+          rangeDescription: range,
+          deleteVideos: _videoScanner.deleteVideos,
+        ),
+      ),
+    );
+  }
+
   Future<void> _chooseFolder() async {
     if (_scanningFolder || _importing) return;
     try {
@@ -390,7 +574,9 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<void> _runFolderScan({
     required bool bestShots,
     bool moments = false,
+    bool clutter = false,
   }) async {
+    FolderScanResult? clutterResult;
     final selectedFolder = _selectedFolder;
     if (!Platform.isAndroid ||
         selectedFolder == null ||
@@ -437,6 +623,7 @@ class _LibraryPageState extends State<LibraryPage> {
         selectedFolder.uri,
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
+        groupShots: !clutter,
         useFaceSignals: _settings.useFaceSignals,
         thresholds: moments
             ? SimilarityThresholds.moments(
@@ -480,6 +667,12 @@ class _LibraryPageState extends State<LibraryPage> {
         shouldCancel: () => _cancelRequested,
       );
       if (!mounted) return;
+      if (clutter) {
+        // The clutter review opens once the scan has finished (below), so the
+        // home screen is not left frozen behind it.
+        clutterResult = scanned;
+        return;
+      }
       // Best moments leaves out groups with no people in them (a plank, a
       // mattress, a black frame) unless the person asked to see them. Face
       // detection must have run on every photo, or the group stays.
@@ -538,6 +731,10 @@ class _LibraryPageState extends State<LibraryPage> {
           _scanActive = false;
         });
       }
+      // Opened after the scan state is reset, so the home screen is usable
+      // again as soon as the review screen is closed.
+      final found = clutterResult;
+      if (found != null && mounted) await _showClutter(found);
     }
   }
 
@@ -1343,22 +1540,24 @@ class _LibraryPageState extends State<LibraryPage> {
     final clock =
         '${elapsed.inMinutes}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
 
+    final noun = _scanningVideos ? 'videos' : 'photos';
     final String label;
     final double? value;
     if (!listed) {
       value = listingFraction;
       label = listingFraction != null
-          ? 'Finding photos… ~${(listingFraction * 100).floor()}%'
+          ? 'Finding $noun… ~${(listingFraction * 100).floor()}%'
           : _folderImagesFound > 0
-          ? 'Finding photos… $_folderImagesFound found · $clock'
-          : 'Finding photos… $clock';
+          ? 'Finding $noun… $_folderImagesFound found · $clock'
+          : 'Finding $noun… $clock';
     } else {
       final fraction = total == 0
           ? 1.0
           : (_folderImagesScanned / total).clamp(0.0, 1.0);
       value = fraction;
-      label =
-          'Analyzing photos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total';
+      label = _scanningVideos
+          ? 'Comparing videos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total'
+          : 'Analyzing photos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total';
     }
     return Semantics(
       label: label,
@@ -1781,10 +1980,13 @@ class _LibraryPageState extends State<LibraryPage> {
     ),
   );
 
-  String get _mainScanLabel => switch (_scanMode) {
+  String get _mainScanLabel => _videoMode
+      ? 'Find exact duplicate videos'
+      : switch (_scanMode) {
     ScanMode.bestShot => 'Find my best photos',
     ScanMode.bestMoments => 'Find my best moments',
     ScanMode.duplicates => 'Find exact duplicates',
+    ScanMode.clutter => 'Find my clutter',
   };
 
   /// Runs the chosen scan. With no album chosen yet it opens the album picker
@@ -1792,6 +1994,14 @@ class _LibraryPageState extends State<LibraryPage> {
   VoidCallback? get _mainScanAction => _loading || _importing || _scanningFolder
       ? null
       : () async {
+          if (_videoMode) {
+            if (_selectedVideoAlbum == null) {
+              await _chooseVideoAlbum();
+              if (!mounted || _selectedVideoAlbum == null) return;
+            }
+            await _scanVideoDuplicates();
+            return;
+          }
           if (_selectedFolder == null) {
             await _chooseFolder();
             if (!mounted || _selectedFolder == null) return;
@@ -1803,6 +2013,8 @@ class _LibraryPageState extends State<LibraryPage> {
               await _scanBestMoments();
             case ScanMode.duplicates:
               await _scanFolder();
+            case ScanMode.clutter:
+              await _scanClutter();
           }
         };
 
@@ -1843,7 +2055,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Smart photo scan',
+                    'Smart media scan',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -1852,8 +2064,14 @@ class _LibraryPageState extends State<LibraryPage> {
           ],
         ),
         const SizedBox(height: 12),
+        _mediaToggle(),
+        const SizedBox(height: 12),
         OutlinedButton(
-          onPressed: _scanningFolder || _importing ? null : _chooseFolder,
+          onPressed: _scanningFolder || _importing
+              ? null
+              : _videoMode
+              ? _chooseVideoAlbum
+              : _chooseFolder,
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(46),
             foregroundColor: _ink,
@@ -1865,7 +2083,9 @@ class _LibraryPageState extends State<LibraryPage> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  _selectedFolder?.name ?? 'Choose an album or folder',
+                  _videoMode
+                      ? _selectedVideoAlbum?.name ?? 'Choose a video album'
+                      : _selectedFolder?.name ?? 'Choose an album or folder',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1882,7 +2102,7 @@ class _LibraryPageState extends State<LibraryPage> {
           style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
-        _toolsGrid(),
+        _videoMode ? _videoToolsGrid() : _toolsGrid(),
         const SizedBox(height: 14),
             ],
           ),
@@ -1899,14 +2119,33 @@ class _LibraryPageState extends State<LibraryPage> {
               label: Text(_cancelRequested ? 'Stopping…' : 'Cancel scan'),
             ),
           ),
+        ] else if (_videoMode && _videoTool != VideoTool.exactDuplicates) ...[
+          // Only exact duplicates is built; the other video tools say so.
+          FilledButton.icon(
+            key: _mainScanKey,
+            onPressed: null,
+            icon: const Icon(Icons.videocam_outlined, size: 20),
+            label: const Text('Scan videos · coming soon'),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(52),
+              textStyle: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
         ] else ...[
           FilledButton.icon(
             key: _mainScanKey,
             onPressed: _mainScanAction,
             icon: Icon(
-              _scanMode == ScanMode.duplicates
+              _videoMode
                   ? Icons.copy_all_outlined
-                  : Icons.auto_awesome_outlined,
+                  : switch (_scanMode) {
+                ScanMode.duplicates => Icons.copy_all_outlined,
+                ScanMode.clutter => Icons.cleaning_services_outlined,
+                _ => Icons.auto_awesome_outlined,
+              },
               size: 20,
             ),
             label: Text(_mainScanLabel),
@@ -2044,12 +2283,13 @@ class _LibraryPageState extends State<LibraryPage> {
             const SizedBox(width: 10),
             Expanded(
               child: _toolTile(
-                title: 'Video Insights',
-                text: 'Discover more from your videos.',
-                chip: 'Coming soon',
-                icon: Icons.videocam_outlined,
+                title: 'Clutter',
+                text: 'Find screenshots, blank and blurry photos.',
+                chip: 'Smart scan',
+                icon: Icons.cleaning_services_outlined,
                 background: const Color(0xFFF3E4E1),
                 accent: const Color(0xFF9A5A50),
+                mode: ScanMode.clutter,
               ),
             ),
           ],
@@ -2057,6 +2297,141 @@ class _LibraryPageState extends State<LibraryPage> {
       ),
     ],
   );
+
+  /// Photos | Videos switch at the top of the scan card.
+  Widget _mediaToggle() {
+    Widget side(String label, IconData icon, bool video) {
+      final selected = _videoMode == video;
+      return Expanded(
+        child: Material(
+          color: selected ? _green : Colors.transparent,
+          borderRadius: BorderRadius.circular(22),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(22),
+            onTap: _scanActive || selected
+                ? null
+                : () => setState(() => _videoMode = video),
+            child: Container(
+              height: 40,
+              alignment: Alignment.center,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 18, color: selected ? Colors.white : _ink),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? Colors.white : _ink,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0F1EC),
+        borderRadius: BorderRadius.circular(25),
+      ),
+      child: Row(
+        children: [
+          side('Photos', Icons.photo_outlined, false),
+          side('Videos', Icons.videocam_outlined, true),
+        ],
+      ),
+    );
+  }
+
+  /// The Videos tab's tools. They are previews: nothing scans yet.
+  Widget _videoToolsGrid() {
+    Widget tile(
+      VideoTool tool,
+      String title,
+      String text,
+      IconData icon,
+      Color background,
+      Color accent,
+    ) => _toolTile(
+      title: title,
+      text: text,
+      chip: tool == VideoTool.exactDuplicates ? 'Smart scan' : 'Coming soon',
+      icon: icon,
+      background: background,
+      accent: accent,
+      highlighted: _videoTool == tool,
+      onTap: () => setState(() => _videoTool = tool),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: tile(
+                  VideoTool.exactDuplicates,
+                  'Exact Duplicates',
+                  'Find identical video copies and free space.',
+                  Icons.copy_all_outlined,
+                  const Color(0xFFE3EEDF),
+                  _green,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: tile(
+                  VideoTool.similarVideos,
+                  'Similar Videos',
+                  'Find repeated recordings of the same scene.',
+                  Icons.movie_outlined,
+                  const Color(0xFFF3E9DD),
+                  const Color(0xFF9A6A3A),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: tile(
+                  VideoTool.bestMoments,
+                  'Best Moments',
+                  'Discover meaningful moments inside your videos.',
+                  Icons.video_library_outlined,
+                  const Color(0xFFE6E7F3),
+                  const Color(0xFF5A5F94),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: tile(
+                  VideoTool.enhance,
+                  'Video Enhance',
+                  'Improve brightness, clarity and stability.',
+                  Icons.auto_fix_high_outlined,
+                  const Color(0xFFF3E4E1),
+                  const Color(0xFF9A5A50),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 
   /// One tile of "Explore smart tools". Tapping a tile with a [mode] makes it
   /// the scan the main button runs (shown by its coloured outline); tiles
@@ -2069,8 +2444,10 @@ class _LibraryPageState extends State<LibraryPage> {
     required Color accent,
     String? chip,
     ScanMode? mode,
+    bool? highlighted,
+    VoidCallback? onTap,
   }) {
-    final selected = mode != null && _scanMode == mode;
+    final selected = highlighted ?? (mode != null && _scanMode == mode);
     return Material(
       color: background,
       borderRadius: BorderRadius.circular(16),
@@ -2078,12 +2455,13 @@ class _LibraryPageState extends State<LibraryPage> {
         borderRadius: BorderRadius.circular(16),
         onTap: _scanActive
             ? null
-            : mode == null
-            ? () => _showMessage('$title is coming soon.')
-            : () {
-                setState(() => _scanMode = mode);
-                _scrollToMainScanButton();
-              },
+            : onTap ??
+                  (mode == null
+                      ? () => _showMessage('$title is coming soon.')
+                      : () {
+                          setState(() => _scanMode = mode);
+                          _scrollToMainScanButton();
+                        }),
         child: Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(

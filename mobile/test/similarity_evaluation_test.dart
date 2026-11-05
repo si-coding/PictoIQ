@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 /// A small labelled set built from synthetic hashes. It guards against
 /// regressions in the grouping rules and shows how precision and recall are

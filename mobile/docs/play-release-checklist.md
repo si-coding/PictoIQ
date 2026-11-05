@@ -33,7 +33,7 @@ Check the build is really signed with your key: the build must not warn about de
 
 - **Target API level.** New apps and updates must target API 36 or higher from 31 August 2026. Look in the merged manifest (`build/app/intermediates/merged_manifests/release/`) for `targetSdkVersion`. If it is lower, upgrade Flutter (`flutter upgrade`) and rebuild.
 - **16 KB page size.** Upload the bundle to an internal test track and read Play Console's warnings, or check the `.so` files in Android Studio (Build > Analyze APK). The ML Kit face-detection plugin has native libraries; update it if it is flagged.
-- **Permissions.** The merged manifest should not contain storage permissions (READ_MEDIA_*, MANAGE_EXTERNAL_STORAGE). ML Kit adds INTERNET (it sends diagnostics to Google); the app itself works offline.
+- **Permissions.** The merged manifest should contain READ_MEDIA_IMAGES, READ_MEDIA_VIDEO and READ_EXTERNAL_STORAGE (maxSdkVersion 32), and must not contain MANAGE_EXTERNAL_STORAGE. Play requires you to fill in the Photo and video permissions declaration (see `play-store-listing.md`). ML Kit adds INTERNET (it sends diagnostics to Google); the app itself works offline.
 - **Application ID.** `com.pictoiq.app` cannot change after publishing.
 
 ## 4. Test the release build on a real phone (you)

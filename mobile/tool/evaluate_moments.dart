@@ -19,8 +19,8 @@
 import 'dart:io';
 
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/moment_selection.dart';
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 class _Row {
   _Row(this.name, this.moment, this.faces, this.quality);

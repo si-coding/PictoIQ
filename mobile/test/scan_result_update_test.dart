@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/folder_duplicate_scanner.dart';
-import 'package:pictoiq_mobile/shot_ranking.dart';
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/shared/shot_ranking.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 FolderScanPhoto _photo(String name, {double sharpness = 100, String? sha}) =>
     FolderScanPhoto(

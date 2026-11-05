@@ -4,7 +4,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 import 'package:saf/saf.dart';
 
 const _baseTime = 1700000000000;

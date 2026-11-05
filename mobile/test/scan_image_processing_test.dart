@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/scan_image_processing.dart';
+import 'package:pictoiq_mobile/core/media/image_processing.dart';
 
 void main() {
   test('collects stream chunks as typed bytes without changing content', () async {

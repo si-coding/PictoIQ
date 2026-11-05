@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/shot_ranking.dart';
+import 'package:pictoiq_mobile/shared/shot_ranking.dart';
 
 ShotInput _shot(
   String id, {

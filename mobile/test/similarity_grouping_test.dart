@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 const _t0 = 1700000000000;
 

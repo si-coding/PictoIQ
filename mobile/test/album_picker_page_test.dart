@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/album_picker_page.dart';
-import 'package:pictoiq_mobile/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/features/photos/library/album_picker_page.dart';
+import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 
 const _albums = [
   MediaAlbum(id: 'all', name: 'All photos', count: 3200),

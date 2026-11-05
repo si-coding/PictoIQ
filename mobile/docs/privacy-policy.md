@@ -6,7 +6,7 @@ PictoIQ ("the app") helps you find the best shot among similar photos and remove
 
 ## Your photos stay on your device
 
-- PictoIQ reads photos only from the folder you choose with Android's folder picker. It cannot see any other folder.
+- PictoIQ asks Android for permission to see your photos so it can list your albums (Camera, Screenshots and so on). It reads photos only from the album or folder you choose to scan. You can also choose a folder with Android's folder picker instead.
 - Photos are analysed on your device. They are **not uploaded** to us or to anyone else.
 - There is **no account** and no sign-in.
 - PictoIQ does not show ads.
@@ -15,7 +15,7 @@ PictoIQ ("the app") helps you find the best shot among similar photos and remove
 
 - It creates small previews and numerical fingerprints (such as colour and sharpness measurements) to group similar photos and suggest the best one. These are kept in memory while the app is open and are not saved or sent anywhere.
 - It detects whether faces are present, whether eyes are open and whether people are smiling, using Google ML Kit's on-device face detection. It does **not** identify who anyone is and does not compare people with each other beyond counting faces and comparing clothing colours inside the same scan.
-- It deletes a photo **only** after you confirm in the app. Deleted photos are removed from the folder you chose.
+- It deletes a photo **only** after you confirm in the app, and Android may ask you to confirm again. Deleted photos are removed from your phone's photo library or from the folder you chose.
 
 ## Information stored on your device
 

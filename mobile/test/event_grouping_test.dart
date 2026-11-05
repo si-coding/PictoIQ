@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/event_grouping.dart';
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/shared/event_grouping.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 const _hour = 60 * 60 * 1000;
 

@@ -13,7 +13,7 @@
 import 'dart:io';
 
 import 'package:image/image.dart' as img;
-import 'package:pictoiq_mobile/similarity_grouping.dart';
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 Future<void> main(List<String> args) async {
   if (args.length != 2) {

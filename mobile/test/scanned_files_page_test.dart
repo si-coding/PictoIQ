@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/folder_duplicate_scanner.dart';
-import 'package:pictoiq_mobile/scanned_files_page.dart';
+import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
 
 FolderScanPhoto _photo(String name) => FolderScanPhoto(
   uri: 'content://test/$name',

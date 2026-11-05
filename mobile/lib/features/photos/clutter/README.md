@@ -1,0 +1,1 @@
+Clutter: finds screenshots, documents, blank, blurry and tiny photos (`clutter_classifier.dart`) and a review screen to remove them (`clutter_page.dart`). Uses the best-shot scan's measurements, without grouping.

@@ -6,10 +6,10 @@ Goal: discover meaningful moments (events > moments > best 1-3 photos), not just
 
 | Item | Status |
 |---|---|
-| Events by time gaps (`event_grouping.dart`) | Done |
+| Events by time gaps (`shared/event_grouping.dart`) | Done |
 | Moments inside an event: time window + visual + clothing + composition | Done (heuristic, untuned) |
 | Configurable: moment length, photos per moment, variety, expressions, clothing strictness, split portraits/couples/groups | Done (Settings > Best moments) |
-| Photo quality kept separate from moment grouping | Done (`shot_ranking.dart` vs `moment_selection.dart`) |
+| Photo quality kept separate from moment grouping | Done (`shared/shot_ranking.dart` vs `features/photos/best_moments/moment_selection.dart`) |
 | Diversity-aware picks (MMR), faults penalised, smiles tunable (candid not punished) | Done |
 | One primary moment per photo | Done (clustering) |
 | Results summary: events / moments / recommended photos | Done |

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pictoiq_mobile/selection_policy.dart';
+import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
 
 KeepDecision _decide({
   List<String> ranked = const ['a', 'b', 'c'],
