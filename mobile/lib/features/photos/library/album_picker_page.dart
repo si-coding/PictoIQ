@@ -27,7 +27,12 @@ class AlbumPickerPage extends StatefulWidget {
     required this.loadThumbnails,
     required this.loadPhoto,
     required this.openSettings,
+    this.accessDetail,
   });
+
+  /// A short technical line about the access Android gave, shown in small
+  /// type under the messages. Optional.
+  final String Function()? accessDetail;
 
   /// Asks for photo access; true when granted.
   final Future<bool> Function() requestAccess;
@@ -52,6 +57,9 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
   _Status _status = _Status.loading;
   List<MediaAlbum> _albums = const [];
 
+  /// What went wrong, shown under the failure message to help fix it.
+  String? _error;
+
   @override
   void initState() {
     super.initState();
@@ -71,8 +79,14 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
         _albums = albums;
         _status = _Status.ready;
       });
-    } catch (_) {
-      if (mounted) setState(() => _status = _Status.failed);
+    } catch (error, stack) {
+      debugPrint('Photo albums failed to load: $error\n$stack');
+      if (mounted) {
+        setState(() {
+          _error = '${error.runtimeType}: $error';
+          _status = _Status.failed;
+        });
+      }
     }
   }
 
@@ -89,6 +103,20 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
       ),
     );
     if (chosen != null && mounted) Navigator.of(context).pop(chosen);
+  }
+
+  /// The small technical line, or nothing.
+  Widget _detail() {
+    final text = widget.accessDetail?.call() ?? '';
+    if (text.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 11, color: Color(0xFF9A9C92)),
+      ),
+    );
   }
 
   void _otherFolder() => Navigator.of(context).pop(AlbumPickerChoice.otherFolder);
@@ -121,7 +149,8 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
       ),
       _Status.failed => _message(
         icon: Icons.error_outline,
-        text: 'Your albums could not be loaded right now.',
+        text:
+            'Your albums could not be loaded right now.${_error == null ? '' : '\n\n$_error'}',
         actions: [
           FilledButton(onPressed: _load, child: const Text('Try again')),
           TextButton(
@@ -159,6 +188,7 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
           Text(text, textAlign: TextAlign.center),
           const SizedBox(height: 12),
           ...actions,
+          _detail(),
         ],
       ),
     ),
@@ -199,6 +229,7 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
                 onPressed: widget.openSettings,
                 child: const Text('Open settings'),
               ),
+              _detail(),
             ],
           ),
         ),

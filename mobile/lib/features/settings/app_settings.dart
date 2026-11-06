@@ -6,6 +6,10 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
+import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart'
+    show ClutterBlur, ClutterKind;
+import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart'
+    show VideoKeep;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart' show DocumentMode, MatchLevel, TimeMode;
 
 /// Preferences that outlive one run of the app.
@@ -27,6 +31,9 @@ class AppSettings {
     this.momentSeparateTypes = true,
     this.momentShowScenes = false,
     this.momentPlace = MomentPlace.off,
+    this.clutterOff = const {},
+    this.clutterBlur = ClutterBlur.balanced,
+    this.videoKeep = VideoKeep.oldest,
   });
 
   /// When true, PictoIQ never picks a similar photo to keep: the user marks
@@ -84,6 +91,15 @@ class AppSettings {
   /// Best moments: keep photos taken in different places apart.
   final MomentPlace momentPlace;
 
+  /// Clutter: the kinds of clutter that are not looked for. Empty means all.
+  final Set<ClutterKind> clutterOff;
+
+  /// Clutter: how soft a photo must be to count as blurry.
+  final ClutterBlur clutterBlur;
+
+  /// Exact duplicate videos: which video of a set is kept by default.
+  final VideoKeep videoKeep;
+
   AppSettings copyWith({
     bool? manualSelectionOnly,
     bool? useFaceSignals,
@@ -101,6 +117,9 @@ class AppSettings {
     bool? momentSeparateTypes,
     bool? momentShowScenes,
     MomentPlace? momentPlace,
+    Set<ClutterKind>? clutterOff,
+    ClutterBlur? clutterBlur,
+    VideoKeep? videoKeep,
   }) => AppSettings(
     manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
     useFaceSignals: useFaceSignals ?? this.useFaceSignals,
@@ -118,6 +137,9 @@ class AppSettings {
     momentSeparateTypes: momentSeparateTypes ?? this.momentSeparateTypes,
     momentShowScenes: momentShowScenes ?? this.momentShowScenes,
     momentPlace: momentPlace ?? this.momentPlace,
+    clutterOff: clutterOff ?? this.clutterOff,
+    clutterBlur: clutterBlur ?? this.clutterBlur,
+    videoKeep: videoKeep ?? this.videoKeep,
   );
 
   Map<String, Object?> toJson() => {
@@ -137,6 +159,9 @@ class AppSettings {
     'momentSeparateTypes': momentSeparateTypes,
     'momentShowScenes': momentShowScenes,
     'momentPlace': momentPlace.name,
+    'clutterOff': [for (final kind in clutterOff) kind.name]..sort(),
+    'clutterBlur': clutterBlur.name,
+    'videoKeep': videoKeep.name,
   };
 
   /// Unknown or wrongly typed fields fall back to their defaults.
@@ -158,6 +183,9 @@ class AppSettings {
     final separateTypes = json['momentSeparateTypes'];
     final showScenes = json['momentShowScenes'];
     final place = json['momentPlace'];
+    final off = json['clutterOff'];
+    final blur = json['clutterBlur'];
+    final keep = json['videoKeep'];
     return AppSettings(
       manualSelectionOnly: manual is bool
           ? manual
@@ -207,6 +235,20 @@ class AppSettings {
         (value) => value.name == place,
         orElse: () => defaults.momentPlace,
       ),
+      clutterOff: off is List
+          ? {
+              for (final kind in ClutterKind.values)
+                if (off.contains(kind.name)) kind,
+            }
+          : defaults.clutterOff,
+      clutterBlur: ClutterBlur.values.firstWhere(
+        (value) => value.name == blur,
+        orElse: () => defaults.clutterBlur,
+      ),
+      videoKeep: VideoKeep.values.firstWhere(
+        (value) => value.name == keep,
+        orElse: () => defaults.videoKeep,
+      ),
     );
   }
 
@@ -228,7 +270,11 @@ class AppSettings {
       other.momentExpression == momentExpression &&
       other.momentSeparateTypes == momentSeparateTypes &&
       other.momentShowScenes == momentShowScenes &&
-      other.momentPlace == momentPlace;
+      other.momentPlace == momentPlace &&
+      other.clutterOff.length == clutterOff.length &&
+      other.clutterOff.containsAll(clutterOff) &&
+      other.clutterBlur == clutterBlur &&
+      other.videoKeep == videoKeep;
 
   @override
   int get hashCode => Object.hash(
@@ -248,6 +294,9 @@ class AppSettings {
     momentSeparateTypes,
     momentShowScenes,
     momentPlace,
+    Object.hashAll([for (final kind in clutterOff) kind.index]..sort()),
+    clutterBlur,
+    videoKeep,
   );
 }
 

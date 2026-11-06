@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
 import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
+import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart'
+    show ClutterBlur, ClutterKind;
+import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart'
+    show VideoKeep;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart' show DocumentMode, MatchLevel, TimeMode;
 
 const _green = Color(0xFF54744C);
@@ -14,10 +18,15 @@ class SettingsPage extends StatefulWidget {
     super.key,
     required this.initial,
     required this.onChanged,
+    this.showVideoSettings = true,
   });
 
   final AppSettings initial;
   final ValueChanged<AppSettings> onChanged;
+
+  /// False when videos are switched off for this build, which hides the
+  /// Videos section.
+  final bool showVideoSettings;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -184,6 +193,43 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
           _section(
+            title: 'Clutter',
+            icon: Icons.cleaning_services_outlined,
+            note:
+                'Which kinds of photos are listed as clutter. Nothing is deleted until you confirm. Changes apply to the next scan.',
+            children: [
+              _kindChips(),
+              _choice<ClutterBlur>(
+                title: 'How blurry counts as blurry',
+                values: ClutterBlur.values,
+                selected: _settings.clutterBlur,
+                label: (blur) => blur.label,
+                onSelected: (blur) =>
+                    _change(_settings.copyWith(clutterBlur: blur)),
+                note:
+                    '${_settings.clutterBlur.description} Photos with faces are never listed as blurry, documents or tiny. Turning off "Use faces and eyes" under Best shot removes that protection.',
+              ),
+            ],
+          ),
+          if (widget.showVideoSettings)
+            _section(
+              title: 'Videos',
+              icon: Icons.videocam_outlined,
+              note: 'Exact duplicate videos. Changes apply to the next scan.',
+              children: [
+                _choice<VideoKeep>(
+                  title: 'Copy to keep',
+                  values: VideoKeep.values,
+                  selected: _settings.videoKeep,
+                  label: (keep) => keep.label,
+                  onSelected: (keep) =>
+                      _change(_settings.copyWith(videoKeep: keep)),
+                  note:
+                      '${_settings.videoKeep.description} You can still pick a different one in each set before deleting.',
+                ),
+              ],
+            ),
+          _section(
             title: 'Results',
             icon: Icons.view_agenda_outlined,
             children: [
@@ -278,6 +324,47 @@ class _SettingsPageState extends State<SettingsPage> {
             padding: const EdgeInsets.only(top: 6),
             child: Text(note, style: const TextStyle(fontSize: 12, color: _muted)),
           ),
+      ],
+    ),
+  );
+
+  /// One chip per kind of clutter; a lit chip means it is looked for.
+  Widget _kindChips() => Padding(
+    padding: const EdgeInsets.only(top: 14, bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Look for',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final kind in ClutterKind.values)
+              FilterChip(
+                label: Text(kind.title),
+                selected: !_settings.clutterOff.contains(kind),
+                showCheckmark: false,
+                onSelected: (on) => _change(
+                  _settings.copyWith(
+                    clutterOff: on
+                        ? ({..._settings.clutterOff}..remove(kind))
+                        : {..._settings.clutterOff, kind},
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _settings.clutterOff.length == ClutterKind.values.length
+              ? 'Everything is turned off, so a clutter scan finds nothing.'
+              : 'Lit types are looked for. Each photo is listed under its first reason, in the order shown.',
+          style: const TextStyle(fontSize: 12, color: _muted),
+        ),
       ],
     ),
   );

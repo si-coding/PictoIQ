@@ -143,6 +143,31 @@ void main() {
       expect(items.first.kind, ClutterKind.screenshot);
     });
 
+    test('leaves out the kinds that are turned off', () {
+      final photos = [
+        _photo('Screenshot_1.png'),
+        _photo('blur.jpg', sharpness: 1),
+      ];
+      final items = findClutter(photos, leaveOut: {ClutterKind.screenshot});
+      expect([for (final i in items) i.photo.name], ['blur.jpg']);
+      expect(
+        findClutter(photos, leaveOut: {...ClutterKind.values}),
+        isEmpty,
+      );
+    });
+
+    test('blur sensitivity changes what counts as blurry', () {
+      final photo = _photo('s.jpg', sharpness: 20);
+      ClutterThresholds at(ClutterBlur blur) =>
+          ClutterThresholds(blurrySharpness: blur.sharpness);
+      expect(clutterKindOf(photo, thresholds: at(ClutterBlur.relaxed)), isNull);
+      expect(clutterKindOf(photo, thresholds: at(ClutterBlur.balanced)), isNull);
+      expect(
+        clutterKindOf(photo, thresholds: at(ClutterBlur.strict)),
+        ClutterKind.blurry,
+      );
+    });
+
     test('returns nothing for a clean folder', () {
       expect(findClutter([_photo('a.jpg'), _photo('b.jpg')]), isEmpty);
     });

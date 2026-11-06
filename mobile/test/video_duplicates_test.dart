@@ -39,6 +39,21 @@ void main() {
       expect([for (final v in sets.single) v.id], ['a', 'b']);
     });
 
+    test('videos of a picked folder are matched on file size', () {
+      VideoItem file(String id, int size) => VideoItem(
+        id: 'saf:$id',
+        title: id,
+        durationSeconds: 0,
+        width: 0,
+        height: 0,
+        createdAt: DateTime(2026, 10, 1),
+        size: size,
+      );
+      final sets = candidateSets([file('a', 500), file('b', 500), file('c', 900)]);
+      expect(sets, hasLength(1));
+      expect([for (final v in sets.single) v.id], ['saf:a', 'saf:b']);
+    });
+
     test('a library with no matching pairs has no candidates', () {
       expect(candidateSets([_video('a'), _video('b', seconds: 3)]), isEmpty);
     });
@@ -125,6 +140,15 @@ void main() {
       expect(group.without({'c'})!.items, hasLength(2));
       expect(group.without({'b', 'c'}), isNull);
       expect(group.without({}), same(group));
+    });
+
+    test('suggestedKeep follows the keep rule', () {
+      final group = VideoDuplicateGroup(
+        id: 'g',
+        items: [_video('a'), _video('b', day: 2), _video('c', day: 3)],
+      );
+      expect(group.suggestedKeep(VideoKeep.oldest).id, 'a');
+      expect(group.suggestedKeep(VideoKeep.newest).id, 'c');
     });
 
     test('bytesFreedKeeping adds up the other videos', () {

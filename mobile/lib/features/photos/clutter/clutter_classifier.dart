@@ -16,6 +16,21 @@ enum ClutterKind {
   final String description;
 }
 
+/// How strictly a photo must be soft to count as blurry.
+enum ClutterBlur {
+  relaxed('Relaxed', 'Only photos that are very soft.', 8),
+  balanced('Balanced', 'Photos that are soft all over.', 15),
+  strict('Strict', 'Also slightly soft photos. May include some plain scenes.', 30);
+
+  const ClutterBlur(this.label, this.description, this.sharpness);
+
+  final String label;
+  final String description;
+
+  /// Sharpness below this counts as blurry (see `ImageSignals.sharpness`).
+  final double sharpness;
+}
+
 /// One photo that looks like clutter, and why.
 class ClutterItem {
   const ClutterItem({required this.photo, required this.kind});
@@ -90,14 +105,19 @@ ClutterKind? clutterKindOf(
 
 /// Every photo in [photos] that looks like clutter, biggest files first within
 /// each kind so the most space is at the top.
+///
+/// Kinds in [leaveOut] are not looked for: a photo whose first reason is one
+/// of them is simply not listed.
 List<ClutterItem> findClutter(
   Iterable<FolderScanPhoto> photos, {
   ClutterThresholds thresholds = const ClutterThresholds(),
+  Set<ClutterKind> leaveOut = const {},
 }) {
   final items = <ClutterItem>[];
   for (final photo in photos) {
     final kind = clutterKindOf(photo, thresholds: thresholds);
-    if (kind != null) items.add(ClutterItem(photo: photo, kind: kind));
+    if (kind == null || leaveOut.contains(kind)) continue;
+    items.add(ClutterItem(photo: photo, kind: kind));
   }
   items.sort((a, b) {
     final byKind = a.kind.index.compareTo(b.kind.index);

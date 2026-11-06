@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart'
     show getTemporaryDirectory;
 import 'package:photo_manager/photo_manager.dart'
     show
+        AndroidPermission,
         AssetEntity,
         AssetPathEntity,
         FilterOptionGroup,
@@ -25,6 +26,7 @@ import 'package:photo_manager/photo_manager.dart'
         ThumbnailSize;
 import 'package:saf/saf.dart';
 
+import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/core/media/image_processing.dart';
 import 'package:pictoiq_mobile/shared/shot_ranking.dart';
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
@@ -602,8 +604,25 @@ class FolderDuplicateScanner {
 
   /// Asks for access to the phone's photos. True when granted (full or the
   /// photos the user chose to share).
+  ///
+  /// When videos are switched off for the build (see [FeatureFlags]) only
+  /// photo access is requested, so a photo-only app never asks for videos.
+  /// What Android last said about photo access and how many albums it then
+  /// listed. Shown on the album picker to help find permission problems.
+  String accessDetail = '';
+
   Future<bool> requestMediaAccess() async {
-    final state = await PhotoManager.requestPermissionExtend();
+    final state = await PhotoManager.requestPermissionExtend(
+      requestOption: PermissionRequestOption(
+        androidPermission: AndroidPermission(
+          type: FeatureFlags.current.videoEnabled
+              ? RequestType.common
+              : RequestType.image,
+          mediaLocation: false,
+        ),
+      ),
+    );
+    accessDetail = 'Android reports: ${state.name}.';
     return state == PermissionState.authorized ||
         state == PermissionState.limited;
   }
@@ -643,6 +662,8 @@ class FolderDuplicateScanner {
       (path.isAll ? all : albums).add(album);
     }
     albums.sort((a, b) => b.count.compareTo(a.count));
+    accessDetail =
+        '$accessDetail Photo albums found: ${all.length + albums.length}.';
     return [...all, ...albums];
   }
 

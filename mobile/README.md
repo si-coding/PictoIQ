@@ -89,8 +89,21 @@ samples, guidance on mobile development, and a full API reference.
 ## Publishing
 
 See `docs/play-release-checklist.md` (signing, bundle, Play Console steps), `docs/privacy-policy.md` (draft to host publicly) and `docs/play-store-listing.md` (listing text and Data safety draft). Release signing reads `android/key.properties` (see `android/key.properties.example`).
-- **Settings page.** Settings are on their own page (tune icon at the top of the home screen; back arrow to return), in three sections: Best moments, Best shot and similar photos, Results. The date range defaults to 7 days. While a scan runs the screen is locked and the progress button stays where the scan button was and Cancel is the only live control.
+- **Settings page.** Settings are on their own page (tune icon at the top of the home screen; back arrow to return), in five sections: Best moments, Best shot and similar photos, Clutter, Videos, Results. Clutter: which kinds to look for (screenshots, documents & receipts, blank or very dark, blurry, tiny images; all on by default) and how blurry counts as blurry (Relaxed / Balanced / Strict). Photos with faces are never listed as documents, blurry or tiny while "Use faces and eyes" is on. Videos: which copy of an identical set is kept by default (Oldest or Newest). Both apply to the next scan and are saved with the other settings. The date range defaults to 7 days. While a scan runs the screen is locked and the progress button stays where the scan button was and Cancel is the only live control.
 
 - **Clutter.** Scans the chosen album and opens a review screen listing photos that look like clutter, each under its first reason: screenshots (by file or folder name), documents and receipts, blank or very dark frames, blurry photos and tiny images. Photos with faces are never called documents, blurry or tiny. Filter by reason, tick photos (nothing is ticked at the start), then delete with one confirmation. Uses the existing on-device measurements; no new model. Limits are in `ClutterThresholds` (`lib/features/photos/clutter/clutter_classifier.dart`) and are cautious but not yet tuned on a real gallery.
 
-- **Exact duplicate videos.** On the Videos tab, choose a video album and a date range, then "Find exact duplicate videos". PictoIQ first narrows candidates to videos with the same length and picture size, reads only those, and groups the ones whose bytes are identical (SHA-256 and size). A review screen shows each set with thumbnails; the oldest is kept by default, tap another to keep it instead, then delete copies with one confirmation (Android asks once more). Needs the READ_MEDIA_VIDEO permission. Works on media-library albums, not folders picked with "Other folder".
+- **Exact duplicate videos.** On the Videos tab, choose a video album (a grid with a cover and count for each, like the photo albums) or "Other folder…", and a date range, then "Find exact duplicate videos". PictoIQ first narrows candidates to videos with the same length and picture size, reads only those, and groups the ones whose bytes are identical (SHA-256 and size). Opening an album first shows its videos in a scrollable grid with their lengths; tap one to play it (uses the `video_player` package), then "Select this album". A review screen shows each set with thumbnails; the oldest is kept by default, tap another to keep it instead, then delete copies with one confirmation (Android asks once more). Needs the READ_MEDIA_VIDEO permission, which PictoIQ asks for separately from photos; if only some videos were shared (Android 14+) or none are visible, the picker says so and links to Android settings. A folder picked with "Other folder…" is also supported: videos are matched by file size, then hashed, and have no thumbnails.
+
+## Feature flags
+
+`lib/core/config/feature_flags.dart` holds switches that turn parts of the app on or off for a build. Set one with `--dart-define`:
+
+- `PICTOIQ_VIDEO` (default `true`): the Videos side of the app. `false` hides the Photos | Videos switch, the video tools and the Videos section in Settings, and the app requests photo access only.
+
+```
+flutter run --dart-define=PICTOIQ_VIDEO=false
+flutter build appbundle --dart-define=PICTOIQ_VIDEO=false
+```
+
+To change the default for every build, edit `defaultVideoEnabled` in that file. For a photo-only Play release also remove the READ_MEDIA_VIDEO line from the manifest (see `docs/play-release-checklist.md`).

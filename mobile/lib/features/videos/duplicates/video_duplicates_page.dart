@@ -16,7 +16,11 @@ class VideoDuplicatesPage extends StatefulWidget {
     required this.result,
     required this.rangeDescription,
     required this.deleteVideos,
+    this.keep = VideoKeep.oldest,
   });
+
+  /// Which video of each set is kept until the person picks another.
+  final VideoKeep keep;
 
   final VideoScanResult result;
   final String rangeDescription;
@@ -42,7 +46,7 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
     for (final item in group.items) {
       if (item.id == id) return item;
     }
-    return group.original;
+    return group.suggestedKeep(widget.keep);
   }
 
   List<VideoItem> _removals(VideoDuplicateGroup group) {
@@ -176,7 +180,7 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
                                 'from $_freedVideos video${_freedVideos == 1 ? '' : 's'}.')
                     : '${_groups.length} set${_groups.length == 1 ? '' : 's'} of '
                           'identical videos in "${widget.result.albumName}" '
-                          '(${widget.rangeDescription}). The oldest of each set is '
+                          '(${widget.rangeDescription}). The ${widget.keep == VideoKeep.newest ? 'newest' : 'oldest'} of each set is '
                           'kept; tap another to keep that one instead. About '
                           '${_bytes(_bytesOf(allRemovals))} can be freed.'
                           '${widget.result.videosUnreadable == 0 ? '' : ' ${widget.result.videosUnreadable} could not be read.'}',
@@ -258,7 +262,9 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '${group.items.length} identical videos · ${_length(group.original.durationSeconds)} · ${_bytes(group.original.size)} each',
+            '${group.items.length} identical videos'
+            '${group.original.durationSeconds > 0 ? ' · ${_length(group.original.durationSeconds)}' : ''}'
+            ' · ${_bytes(group.original.size)} each',
             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),

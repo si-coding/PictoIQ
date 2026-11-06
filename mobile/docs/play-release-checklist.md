@@ -33,6 +33,7 @@ Check the build is really signed with your key: the build must not warn about de
 
 - **Target API level.** New apps and updates must target API 36 or higher from 31 August 2026. Look in the merged manifest (`build/app/intermediates/merged_manifests/release/`) for `targetSdkVersion`. If it is lower, upgrade Flutter (`flutter upgrade`) and rebuild.
 - **16 KB page size.** Upload the bundle to an internal test track and read Play Console's warnings, or check the `.so` files in Android Studio (Build > Analyze APK). The ML Kit face-detection plugin has native libraries; update it if it is flagged.
+- **Video switch.** Videos are controlled by one flag, `PICTOIQ_VIDEO` (default on, see `lib/core/config/feature_flags.dart`). To ship a photo-only build, pass `--dart-define=PICTOIQ_VIDEO=false` to `flutter build appbundle`: the Photos | Videos switch, the video tools and the Videos settings disappear, and only photo access is requested. The flag does not edit the manifest, so for a photo-only release also delete the READ_MEDIA_VIDEO line from `AndroidManifest.xml`, or Play will still ask for the video permission declaration.
 - **Permissions.** The merged manifest should contain READ_MEDIA_IMAGES, READ_MEDIA_VIDEO and READ_EXTERNAL_STORAGE (maxSdkVersion 32), and must not contain MANAGE_EXTERNAL_STORAGE. Play requires you to fill in the Photo and video permissions declaration (see `play-store-listing.md`). ML Kit adds INTERNET (it sends diagnostics to Google); the app itself works offline.
 - **Application ID.** `com.pictoiq.app` cannot change after publishing.
 

@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart' show PhotoManager;
 import 'package:share_plus/share_plus.dart';
 
+import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/album_picker_page.dart';
@@ -21,6 +22,7 @@ import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
 import 'package:pictoiq_mobile/features/settings/settings_page.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates_page.dart';
+import 'package:pictoiq_mobile/features/videos/library/video_album_picker_page.dart';
 import 'package:pictoiq_mobile/shared/shot_ranking.dart' show RankedShot;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
@@ -123,6 +125,11 @@ class _LibraryPageState extends State<LibraryPage> {
   ScanMode _scanMode = ScanMode.bestShot;
 
   /// Whether the home screen shows the Videos tab instead of Photos.
+  /// Videos can be switched off for a build (see [FeatureFlags]).
+  bool get _videoEnabled => FeatureFlags.current.videoEnabled;
+
+  /// True while the Videos side of the switch is showing. Only ever true when
+  /// [_videoEnabled], because the switch is not shown otherwise.
   bool _videoMode = false;
   VideoTool _videoTool = VideoTool.exactDuplicates;
 
@@ -369,11 +376,21 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Looks for screenshots, documents, blank, blurry and tiny photos and
   /// opens a review screen. Nothing is deleted without confirmation.
   Future<void> _scanClutter() async {
+    if (_settings.clutterOff.length == ClutterKind.values.length) {
+      _showMessage('Every clutter type is turned off in Settings.');
+      return;
+    }
     await _runFolderScan(bestShots: true, clutter: true);
   }
 
   Future<void> _showClutter(FolderScanResult scan) async {
-    final items = findClutter(scan.scannedPhotos);
+    final items = findClutter(
+      scan.scannedPhotos,
+      thresholds: ClutterThresholds(
+        blurrySharpness: _settings.clutterBlur.sharpness,
+      ),
+      leaveOut: _settings.clutterOff,
+    );
     if (items.isEmpty) {
       _showMessage(
         'No clutter found in ${scan.folderName}. '
@@ -395,50 +412,39 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// Lists the phone's video albums in a sheet and remembers the choice.
+  /// Opens the video album picker (covers and counts, like the photo albums)
+  /// and remembers the choice. "Other folder…" uses Android's folder picker.
   Future<void> _chooseVideoAlbum() async {
     if (_scanningFolder || _importing) return;
     try {
-      if (!await _videoScanner.requestAccess()) {
-        _showMessage(
-          'PictoIQ needs permission to see your videos. Allow it in the phone settings.',
-        );
-        return;
-      }
-      final albums = await _videoScanner.listAlbums();
-      if (!mounted) return;
-      if (albums.isEmpty) {
-        _showMessage('No videos were found on this phone.');
-        return;
-      }
-      final chosen = await showModalBottomSheet<VideoAlbum>(
-        context: context,
-        showDragHandle: true,
-        isScrollControlled: true,
-        builder: (sheetContext) => SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              for (final album in albums)
-                ListTile(
-                  leading: const Icon(Icons.video_library_outlined),
-                  title: Text(album.name),
-                  subtitle: Text(
-                    '${album.count} video${album.count == 1 ? '' : 's'}',
-                  ),
-                  onTap: () => Navigator.pop(sheetContext, album),
-                ),
-            ],
+      final choice = await Navigator.of(context).push<Object>(
+        MaterialPageRoute<Object>(
+          builder: (_) => VideoAlbumPickerPage(
+            requestAccess: _videoScanner.requestAccess,
+            loadAlbums: _videoScanner.listAlbums,
+            loadCover: _videoScanner.albumCover,
+            openSettings: PhotoManager.openSetting,
+            manageLimited: _videoScanner.manageLimitedAccess,
+            accessDetail: () => _videoScanner.accessDetail,
+            loadVideos: _videoScanner.albumVideos,
+            loadVideoUrl: _videoScanner.videoUrl,
           ),
         ),
       );
+      if (!mounted) return;
+      VideoAlbum? chosen;
+      if (choice is VideoAlbum) {
+        chosen = choice;
+      } else if (choice == VideoPickerChoice.otherFolder) {
+        chosen = await _videoScanner.pickFolder();
+      }
       if (chosen != null && mounted) {
         setState(() => _selectedVideoAlbum = chosen);
         _scrollToMainScanButton();
       }
     } catch (error) {
       debugPrint('Video albums unavailable: ${error.runtimeType}');
-      if (mounted) _showMessage('Could not list your video albums.');
+      if (mounted) _showMessage('Could not open your video albums.');
     }
   }
 
@@ -525,6 +531,7 @@ class _LibraryPageState extends State<LibraryPage> {
         builder: (_) => VideoDuplicatesPage(
           result: scan,
           rangeDescription: range,
+          keep: _settings.videoKeep,
           deleteVideos: _videoScanner.deleteVideos,
         ),
       ),
@@ -545,6 +552,7 @@ class _LibraryPageState extends State<LibraryPage> {
             loadThumbnails: _folderScanner.albumThumbnails,
             loadPhoto: _folderScanner.albumPhoto,
             openSettings: PhotoManager.openSetting,
+            accessDetail: () => _folderScanner.accessDetail,
           ),
         ),
       );
@@ -2063,8 +2071,10 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        _mediaToggle(),
+        if (_videoEnabled) ...[
+          const SizedBox(height: 12),
+          _mediaToggle(),
+        ],
         const SizedBox(height: 12),
         OutlinedButton(
           onPressed: _scanningFolder || _importing
@@ -4698,7 +4708,11 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<void> _openSettings() => Navigator.of(context).push<void>(
     MaterialPageRoute(
       builder: (_) =>
-          SettingsPage(initial: _settings, onChanged: _updateSettings),
+          SettingsPage(
+            initial: _settings,
+            onChanged: _updateSettings,
+            showVideoSettings: _videoEnabled,
+          ),
     ),
   );
 

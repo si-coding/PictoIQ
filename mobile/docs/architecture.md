@@ -52,7 +52,7 @@ File moves only: no class was renamed or changed. `features/photos/library/` and
 
 The home screen has a Photos | Videos switch with four video tiles. **Exact Duplicates is built** (`features/videos/duplicates/`); the other three are "Coming soon". Under `core/video/`, `core/media/` and `features/videos/domain/models` there are still only interfaces and one model. Build order:
 
-1. Exact duplicate videos (file fingerprints only; no frames). **Done.** `video_duplicates.dart` lists video albums with `photo_manager`, narrows candidates to videos with the same length and picture size, then streams a SHA-256 of only those and groups identical size+hash. `video_duplicates_page.dart` is the review screen. Logic is tested in `test/video_duplicates_test.dart`. Reading a video through `photo_manager` can make a temporary copy on Android 10+, so the scan clears that cache afterwards. Folder (SAF) videos are not supported yet, only media-library albums.
+1. Exact duplicate videos (file fingerprints only; no frames). **Done.** `video_duplicates.dart` lists video albums with `photo_manager`, narrows candidates to videos with the same length and picture size, then streams a SHA-256 of only those and groups identical size+hash. `video_duplicates_page.dart` is the review screen. Logic is tested in `test/video_duplicates_test.dart`. Reading a video through `photo_manager` can make a temporary copy on Android 10+, so the scan clears that cache afterwards. Videos in a folder picked with Android's folder picker (SAF) are supported too: they are matched by file size, hashed from the SAF stream, shown without thumbnails and deleted through SAF. `features/videos/library/video_album_picker_page.dart` is the album picker (tapping an album opens `video_album_contents_page.dart`, a scrollable grid with lengths, and `video_player_page.dart` plays a video) (cover and count per album, "Other folder…", and messages for denied, limited or empty access).
 2. Video list and player.
 3. Similar videos (frame sampling plus `shared/similarity_grouping.dart`).
 4. Moments inside a video, then enhancement and export.
@@ -60,3 +60,7 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact Dupl
 ## Clutter (photos)
 
 `features/photos/clutter/` holds `clutter_classifier.dart` (pure Dart, tested in `test/clutter_classifier_test.dart`) and `clutter_page.dart`. The Clutter tile runs `FolderDuplicateScanner.scanUri(bestShotsScan: true, groupShots: false)`, which analyses every photo but skips grouping, then `findClutter` assigns each photo at most one `ClutterKind` and the page shows them for review. Deletion goes through `FolderDuplicateScanner.deleteFiles`, so Android confirms once for the whole batch.
+
+## Feature flags
+
+`core/config/feature_flags.dart` (`FeatureFlags.current.videoEnabled`, from `--dart-define=PICTOIQ_VIDEO`). `main.dart` reads it to show or hide the Photos | Videos switch, `SettingsPage(showVideoSettings:)` hides the Videos section, and `FolderDuplicateScanner.requestMediaAccess` asks for photo access only when videos are off. Video code is not otherwise touched; it is simply never reached.

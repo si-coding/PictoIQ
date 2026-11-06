@@ -3,6 +3,10 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
 import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
+import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart'
+    show ClutterBlur, ClutterKind;
+import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart'
+    show VideoKeep;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 void main() {
@@ -63,6 +67,35 @@ void main() {
     expect(bad.splitByPeople, isTrue);
     expect(bad.timeMode, TimeMode.hint);
     expect(bad.documentMode, DocumentMode.leaveOut);
+  });
+
+  test('clutter and video options survive a save, and bad values fall back',
+      () async {
+    const saved = AppSettings(
+      clutterOff: {ClutterKind.document, ClutterKind.small},
+      clutterBlur: ClutterBlur.strict,
+      videoKeep: VideoKeep.newest,
+    );
+    await store.save(saved);
+    final loaded = await store.load();
+    expect(loaded, saved);
+    expect(loaded.clutterOff, {ClutterKind.document, ClutterKind.small});
+    expect(const AppSettings().clutterOff, isEmpty);
+    expect(const AppSettings().clutterBlur, ClutterBlur.balanced);
+    expect(const AppSettings().videoKeep, VideoKeep.oldest);
+    final bad = AppSettings.fromJson({
+      'clutterOff': 'nope',
+      'clutterBlur': 'x',
+      'videoKeep': 3,
+    });
+    expect(bad.clutterOff, isEmpty);
+    expect(bad.clutterBlur, ClutterBlur.balanced);
+    expect(bad.videoKeep, VideoKeep.oldest);
+    expect(
+      const AppSettings(clutterOff: {ClutterKind.blank}) ==
+          const AppSettings(clutterOff: {ClutterKind.small}),
+      isFalse,
+    );
   });
 
   test('returns defaults when nothing was saved', () async {
