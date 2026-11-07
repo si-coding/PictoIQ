@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart' show PhotoManager;
 import 'package:share_plus/share_plus.dart';
@@ -16,6 +17,7 @@ import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scann
 import 'package:pictoiq_mobile/core/database/database_service.dart';
 import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
 import 'package:pictoiq_mobile/core/media/media_asset.dart';
+import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
 import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
 import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
@@ -70,6 +72,7 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   final _picker = ImagePicker();
   final _folderScanner = FolderDuplicateScanner();
+  final _videoReelService = VideoReelService();
   final _videoScanner = VideoDuplicateScanner();
 
   /// The video album chosen on the Videos tab.
@@ -117,6 +120,7 @@ class _LibraryPageState extends State<LibraryPage> {
   bool _loading = true;
   bool _importing = false;
   bool _scanningFolder = false;
+  bool _creatingReel = false;
   bool _scanningBestShots = false;
   bool _duplicatesOnly = false;
   _PhotoSort _sort = _PhotoSort.recent;
@@ -227,6 +231,7 @@ class _LibraryPageState extends State<LibraryPage> {
     };
     return chosen.isEmpty ? {pair.first.uri} : chosen;
   }
+
   int _folderImagesScanned = 0;
   String? _error;
   String? _folderScanError;
@@ -238,7 +243,8 @@ class _LibraryPageState extends State<LibraryPage> {
     _loadPhotos();
     _loadSettings();
     _scrollController.addListener(() {
-      final far = _scrollController.hasClients && _scrollController.offset > 700;
+      final far =
+          _scrollController.hasClients && _scrollController.offset > 700;
       if (far != _showTopButton.value) _showTopButton.value = far;
     });
   }
@@ -339,7 +345,9 @@ class _LibraryPageState extends State<LibraryPage> {
     final batch = photos.take(30).toList();
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Preparing photos to share…')));
+      ..showSnackBar(
+        const SnackBar(content: Text('Preparing photos to share…')),
+      );
     try {
       final paths = await _folderScanner.prepareForSharing(batch);
       messenger.hideCurrentSnackBar();
@@ -355,7 +363,9 @@ class _LibraryPageState extends State<LibraryPage> {
       if (photos.length > batch.length && mounted) {
         messenger.showSnackBar(
           SnackBar(
-            content: Text('Shared the first ${batch.length} of ${photos.length} photos.'),
+            content: Text(
+              'Shared the first ${batch.length} of ${photos.length} photos.',
+            ),
           ),
         );
       }
@@ -363,7 +373,108 @@ class _LibraryPageState extends State<LibraryPage> {
       debugPrint('Share failed: $error');
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Could not open sharing.')));
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not open sharing.')),
+        );
+    }
+  }
+
+  Future<void> _createMomentsReel(FolderScanResult scan) async {
+    if (_creatingReel) return;
+    final photos = _picksToShare(scan.duplicateGroups);
+    if (photos.isEmpty) {
+      _showMessage('No selected photos are available to add to a reel.');
+      return;
+    }
+
+    final addAudio = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add music to your reel?'),
+        content: const Text(
+          'Choose an MP3 or M4A audio file from your phone, or continue without audio. Mono and stereo audio are supported.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('No audio'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Choose audio'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || addAudio == null) return;
+
+    String? audioPath;
+    if (addAudio) {
+      try {
+        audioPath = await _videoReelService.pickAudio();
+        if (!mounted) return;
+        if (audioPath == null) return;
+      } catch (error, stack) {
+        debugPrint('Audio selection failed: $error\n$stack');
+        if (mounted) _showMessage('Could not select an audio file.');
+        return;
+      }
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _creatingReel = true);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(content: Text('Preparing your best moments…')),
+      );
+    try {
+      final paths = await _folderScanner.prepareForSharing(photos);
+      if (paths.length != photos.length) {
+        throw StateError('Not all selected photos could be read.');
+      }
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text('Creating a reel from ${paths.length} photos…'),
+          ),
+        );
+      final reelPath = await _videoReelService.createReel(
+        paths,
+        audioPath: audioPath,
+      );
+      if (!mounted) return;
+      messenger.hideCurrentSnackBar();
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(reelPath)],
+          text: 'Best moments reel created with PictoIQ',
+        ),
+      );
+    } catch (error, stack) {
+      debugPrint('Best moments reel failed: $error\n$stack');
+      if (mounted) {
+        final details = error is PlatformException ? error.message : null;
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                details == null || details.isEmpty
+                    ? 'Could not create the reel. Please try again.'
+                    : 'Could not create the reel: $details',
+              ),
+            ),
+          );
+      }
+    } finally {
+      if (mounted) setState(() => _creatingReel = false);
     }
   }
 
@@ -773,33 +884,33 @@ class _LibraryPageState extends State<LibraryPage> {
     // A snackbar with an action can stay up until swiped away, so close it
     // ourselves after a few seconds.
     final undoBar = messenger.showSnackBar(
-        SnackBar(
-          duration: const Duration(seconds: 4),
-          content: const Text('Previous results cleared.'),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () {
-              // Only when no new scan has produced results in the meantime.
-              if (!mounted ||
-                  _scanActive ||
-                  _folderScan != null ||
-                  _bestShotsScan != null) {
-                return;
-              }
-              setState(() {
-                _folderScan = folderScan;
-                _bestShotsScan = bestShotsScan;
-                _photoRatings
-                  ..clear()
-                  ..addAll(ratings);
-                _freedBytes = freedBytes;
-                _freedPhotos = freedPhotos;
-                _setupExpanded = false;
-              });
-            },
-          ),
+      SnackBar(
+        duration: const Duration(seconds: 4),
+        content: const Text('Previous results cleared.'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            // Only when no new scan has produced results in the meantime.
+            if (!mounted ||
+                _scanActive ||
+                _folderScan != null ||
+                _bestShotsScan != null) {
+              return;
+            }
+            setState(() {
+              _folderScan = folderScan;
+              _bestShotsScan = bestShotsScan;
+              _photoRatings
+                ..clear()
+                ..addAll(ratings);
+              _freedBytes = freedBytes;
+              _freedPhotos = freedPhotos;
+              _setupExpanded = false;
+            });
+          },
         ),
-      );
+      ),
+    );
     Future.delayed(const Duration(seconds: 4), undoBar.close);
   }
 
@@ -872,9 +983,8 @@ class _LibraryPageState extends State<LibraryPage> {
     if (bestShots && _moments) {
       return KeepDecision(
         keepIds: _momentSelected(group),
-        isUserChoice: _momentPair(group).any(
-          (photo) => _photoRatings[photo.uri] != null,
-        ),
+        isUserChoice: _momentPair(group)
+            .any((photo) => _photoRatings[photo.uri] != null),
         needsReview: false,
       );
     }
@@ -913,9 +1023,9 @@ class _LibraryPageState extends State<LibraryPage> {
     required bool bestShots,
   }) {
     final decision = _decisionFor(group, bestShots: bestShots);
-    final remove = decision
-        .removals([for (final photo in group.photos) photo.uri])
-        .toSet();
+    final remove = decision.removals([
+      for (final photo in group.photos) photo.uri,
+    ]).toSet();
     return group.photos.where((photo) => remove.contains(photo.uri)).toList();
   }
 
@@ -1039,7 +1149,9 @@ class _LibraryPageState extends State<LibraryPage> {
     final newerCopies = _groupRemovals(group, bestShots: false);
     if (keepers.isEmpty || newerCopies.isEmpty) return;
     final recoverableBytes = _groupRecoveryBytes(group, bestShots: false);
-    final keptNames = keepers.map((photo) => '"${photo.relativePath}"').join(', ');
+    final keptNames = keepers
+        .map((photo) => '"${photo.relativePath}"')
+        .join(', ');
     final remove = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1156,7 +1268,9 @@ class _LibraryPageState extends State<LibraryPage> {
                 Text('Deleting from "${scan.folderName}":'),
                 const SizedBox(height: 4),
                 for (final photo in remove)
-                  Text('• ${photo.relativePath} · ${_shotSummary(group, photo)}'),
+                  Text(
+                    '• ${photo.relativePath} · ${_shotSummary(group, photo)}',
+                  ),
                 const SizedBox(height: 10),
                 _recoveryEstimate(recoverableBytes),
                 if (warning != null) ...[
@@ -1733,7 +1847,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 selected: {_showBestResults},
                 onSelectionChanged: (value) => setState(() {
                   _showBestResults = value.first;
-                          }),
+                }),
               ),
             ),
           ),
@@ -1823,7 +1937,9 @@ class _LibraryPageState extends State<LibraryPage> {
         if (!_loading)
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            sliver: SliverToBoxAdapter(child: _libraryControls(duplicateGroups)),
+            sliver: SliverToBoxAdapter(
+              child: _libraryControls(duplicateGroups),
+            ),
           ),
         if (_loading)
           const SliverFillRemaining(
@@ -1916,40 +2032,40 @@ class _LibraryPageState extends State<LibraryPage> {
         ],
       ),
       if (!compact) ...[
-      const SizedBox(height: 16),
-      const Text(
-        'YOUR MEMORIES, MADE SMARTER',
-        style: TextStyle(
-          color: _green,
-          fontSize: 11,
-          fontWeight: FontWeight.w800,
-          letterSpacing: 1.1,
+        const SizedBox(height: 16),
+        const Text(
+          'YOUR MEMORIES, MADE SMARTER',
+          style: TextStyle(
+            color: _green,
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.1,
+          ),
         ),
-      ),
-      const SizedBox(height: 8),
-      // One line: the text shrinks to fit narrow phones.
-      const SizedBox(
-        width: double.infinity,
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
-          child: Text(
-            'Collect memories, not clutter.',
-            maxLines: 1,
-            style: TextStyle(
-              fontSize: 28,
-              height: 1.1,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -1.1,
+        const SizedBox(height: 8),
+        // One line: the text shrinks to fit narrow phones.
+        const SizedBox(
+          width: double.infinity,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Collect memories, not clutter.',
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 28,
+                height: 1.1,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -1.1,
+              ),
             ),
           ),
         ),
-      ),
-      const SizedBox(height: 8),
-      Text(
-        'Discover your best memories & share with your family and friends.',
-        style: TextStyle(color: _ink.withValues(alpha: .66), height: 1.45),
-      ),
+        const SizedBox(height: 8),
+        Text(
+          'Discover your best memories & share with your family and friends.',
+          style: TextStyle(color: _ink.withValues(alpha: .66), height: 1.45),
+        ),
       ],
     ],
   );
@@ -1981,7 +2097,11 @@ class _LibraryPageState extends State<LibraryPage> {
         Expanded(
           child: Text(
             'Pick an album such as Camera. Use "Other folder" for anything not listed.',
-            style: TextStyle(fontSize: 13, height: 1.35, color: Color(0xFF3F4A3A)),
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.35,
+              color: Color(0xFF3F4A3A),
+            ),
           ),
         ),
       ],
@@ -1991,11 +2111,11 @@ class _LibraryPageState extends State<LibraryPage> {
   String get _mainScanLabel => _videoMode
       ? 'Find exact duplicate videos'
       : switch (_scanMode) {
-    ScanMode.bestShot => 'Find my best photos',
-    ScanMode.bestMoments => 'Find my best moments',
-    ScanMode.duplicates => 'Find exact duplicates',
-    ScanMode.clutter => 'Find my clutter',
-  };
+          ScanMode.bestShot => 'Find my best photos',
+          ScanMode.bestMoments => 'Find my best moments',
+          ScanMode.duplicates => 'Find exact duplicates',
+          ScanMode.clutter => 'Find my clutter',
+        };
 
   /// Runs the chosen scan. With no album chosen yet it opens the album picker
   /// first and then starts, so the button is never a dead end.
@@ -2042,78 +2162,87 @@ class _LibraryPageState extends State<LibraryPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-        Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE3EEDF),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.center_focus_strong_outlined,
-                color: _green,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
                 children: [
-                  Text(
-                    'Smart media scan',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE3EEDF),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.center_focus_strong_outlined,
+                      color: _green,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Smart media scan',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
-        if (_videoEnabled) ...[
-          const SizedBox(height: 12),
-          _mediaToggle(),
-        ],
-        const SizedBox(height: 12),
-        OutlinedButton(
-          onPressed: _scanningFolder || _importing
-              ? null
-              : _videoMode
-              ? _chooseVideoAlbum
-              : _chooseFolder,
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size.fromHeight(46),
-            foregroundColor: _ink,
-            side: const BorderSide(color: Color(0xFFCBD0C3)),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.folder_open_outlined, size: 20, color: _green),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _videoMode
-                      ? _selectedVideoAlbum?.name ?? 'Choose a video album'
-                      : _selectedFolder?.name ?? 'Choose an album or folder',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              if (_videoEnabled) ...[
+                const SizedBox(height: 12),
+                _mediaToggle(),
+              ],
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: _scanningFolder || _importing
+                    ? null
+                    : _videoMode
+                    ? _chooseVideoAlbum
+                    : _chooseFolder,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(46),
+                  foregroundColor: _ink,
+                  side: const BorderSide(color: Color(0xFFCBD0C3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.folder_open_outlined,
+                      size: 20,
+                      color: _green,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _videoMode
+                            ? _selectedVideoAlbum?.name ??
+                                  'Choose a video album'
+                            : _selectedFolder?.name ??
+                                  'Choose an album or folder',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(Icons.expand_more, size: 22),
+                  ],
                 ),
               ),
-              const Icon(Icons.expand_more, size: 22),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        _dateChips(),
-        const SizedBox(height: 16),
-        const Text(
-          'What would you like to find?',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 8),
-        _videoMode ? _videoToolsGrid() : _toolsGrid(),
-        const SizedBox(height: 14),
+              const SizedBox(height: 14),
+              _dateChips(),
+              const SizedBox(height: 16),
+              const Text(
+                'What would you like to find?',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              _videoMode ? _videoToolsGrid() : _toolsGrid(),
+              const SizedBox(height: 14),
             ],
           ),
         ),
@@ -2152,10 +2281,10 @@ class _LibraryPageState extends State<LibraryPage> {
               _videoMode
                   ? Icons.copy_all_outlined
                   : switch (_scanMode) {
-                ScanMode.duplicates => Icons.copy_all_outlined,
-                ScanMode.clutter => Icons.cleaning_services_outlined,
-                _ => Icons.auto_awesome_outlined,
-              },
+                      ScanMode.duplicates => Icons.copy_all_outlined,
+                      ScanMode.clutter => Icons.cleaning_services_outlined,
+                      _ => Icons.auto_awesome_outlined,
+                    },
               size: 20,
             ),
             label: Text(_mainScanLabel),
@@ -2193,8 +2322,13 @@ class _LibraryPageState extends State<LibraryPage> {
             for (var i = 0; i < values.length; i++)
               Expanded(
                 child: Padding(
-                  padding: EdgeInsets.only(right: i == values.length - 1 ? 0 : 6),
-                  child: _dateChip(values[i], labels[values[i]] ?? values[i].label),
+                  padding: EdgeInsets.only(
+                    right: i == values.length - 1 ? 0 : 6,
+                  ),
+                  child: _dateChip(
+                    values[i],
+                    labels[values[i]] ?? values[i].label,
+                  ),
                 ),
               ),
           ],
@@ -2883,8 +3017,7 @@ class _LibraryPageState extends State<LibraryPage> {
         ],
         if (scan.duplicateGroups.isNotEmpty &&
             !(bestShots && _moments) &&
-            (bestShots ||
-                _scanRemovals(scan, bestShots: false).isNotEmpty))
+            (bestShots || _scanRemovals(scan, bestShots: false).isNotEmpty))
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: FilledButton.tonalIcon(
@@ -2937,10 +3070,7 @@ class _LibraryPageState extends State<LibraryPage> {
   /// are the scenes in it where similar shots were found. Events are only for
   /// browsing; cleanup decisions are still made per scene.
   List<Widget> _resultCards(FolderScanResult scan, {required bool bestShots}) {
-    final groups = [
-      for (final group in scan.duplicateGroups)
-        group,
-    ];
+    final groups = [for (final group in scan.duplicateGroups) group];
     if (!bestShots) return groups.map(_exactDuplicateCard).toList();
     final photos = scan.scannedPhotos;
     // Grouping ignores time. Headings only use times that describe the
@@ -3001,7 +3131,11 @@ class _LibraryPageState extends State<LibraryPage> {
       padding: const EdgeInsets.only(top: 12),
       child: Row(
         children: [
-          const Icon(Icons.touch_app_outlined, size: 16, color: Color(0xFF77796F)),
+          const Icon(
+            Icons.touch_app_outlined,
+            size: 16,
+            color: Color(0xFF77796F),
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
@@ -3164,7 +3298,11 @@ class _LibraryPageState extends State<LibraryPage> {
             children: [
               const Padding(
                 padding: EdgeInsets.only(top: 2),
-                child: Icon(Icons.folder_open_outlined, color: _green, size: 22),
+                child: Icon(
+                  Icons.folder_open_outlined,
+                  color: _green,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -3287,6 +3425,30 @@ class _LibraryPageState extends State<LibraryPage> {
             status,
             style: const TextStyle(fontSize: 12, color: Color(0xFF596252)),
           ),
+          if (Platform.isAndroid && bestShots && _moments && groups > 0) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonalIcon(
+                onPressed: _scanningFolder || _creatingReel
+                    ? null
+                    : () => _createMomentsReel(scan),
+                icon: _creatingReel
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.movie_creation_outlined, size: 18),
+                label: Text(
+                  _creatingReel
+                      ? 'Creating reel…'
+                      : 'Create reel with best moments',
+                ),
+                style: FilledButton.styleFrom(foregroundColor: _ink),
+              ),
+            ),
+          ],
           // 5. Actions.
           const SizedBox(height: 12),
           Row(
@@ -3568,51 +3730,54 @@ class _LibraryPageState extends State<LibraryPage> {
       child: Stack(
         children: [
           Padding(
-        padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_moments)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8, right: 28, left: 2),
-                child: Text(
-                  _momentCaption(group),
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF596252),
+            padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_moments)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                      bottom: 8,
+                      right: 28,
+                      left: 2,
+                    ),
+                    child: Text(
+                      _momentCaption(group),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF596252),
+                      ),
+                    ),
                   ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final count = group.photos.length;
+                    final columns = _moments
+                        ? (_momentPair(group).length < 2
+                              ? 2
+                              : _momentPair(group).length)
+                        : (count >= 9 ? 5 : 4);
+                    const gap = 8.0;
+                    final width =
+                        ((constraints.maxWidth - gap * (columns - 1)) / columns)
+                            .floorToDouble();
+                    return Wrap(
+                      alignment: WrapAlignment.start,
+                      spacing: gap,
+                      runSpacing: gap,
+                      children: [
+                        for (final photo
+                            in _moments ? _momentPair(group) : group.bestFirst)
+                          _photoTile(group, photo, keepIds, decision, width),
+                      ],
+                    );
+                  },
                 ),
-              ),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final count = group.photos.length;
-                final columns = _moments
-                    ? (_momentPair(group).length < 2
-                          ? 2
-                          : _momentPair(group).length)
-                    : (count >= 9 ? 5 : 4);
-                const gap = 8.0;
-                final width = ((constraints.maxWidth - gap * (columns - 1)) /
-                        columns)
-                    .floorToDouble();
-                return Wrap(
-                  alignment: WrapAlignment.start,
-                  spacing: gap,
-                  runSpacing: gap,
-                  children: [
-                    for (final photo in _moments
-                        ? _momentPair(group)
-                        : group.bestFirst)
-                      _photoTile(group, photo, keepIds, decision, width),
-                  ],
-                );
-              },
+                const SizedBox(height: 8),
+                _cardActions(group, decision),
+              ],
             ),
-            const SizedBox(height: 8),
-            _cardActions(group, decision),
-          ],
-        ),
           ),
           // Skip this group: nothing is deleted and it leaves the list.
           Positioned(
@@ -3661,10 +3826,7 @@ class _LibraryPageState extends State<LibraryPage> {
   /// The clean-up button. In a two-photo group it sits in the free third
   /// slot beside the photos; otherwise it spans the row below them.
   /// Compare and the keep button, in one row under the photos of every group.
-  Widget _cardActions(
-    FolderDuplicateGroup group,
-    KeepDecision decision,
-  ) {
+  Widget _cardActions(FolderDuplicateGroup group, KeepDecision decision) {
     // The match tag (Same shot / Similar / Check) is hidden for now; bring it
     // back with _confidenceChip(group.evidence!).
     final compare = IconButton.filledTonal(
@@ -3728,10 +3890,7 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Every group, safest first: the order review mode
   /// steps through.
   List<FolderDuplicateGroup> _reviewQueue(FolderScanResult scan) {
-    final groups = [
-      for (final group in scan.duplicateGroups)
-        group,
-    ];
+    final groups = [for (final group in scan.duplicateGroups) group];
     groups.sort((a, b) {
       final byConfidence = (a.evidence?.confidence.index ?? 3).compareTo(
         b.evidence?.confidence.index ?? 3,
@@ -4017,10 +4176,7 @@ class _LibraryPageState extends State<LibraryPage> {
               _recoveryEstimate(bytes),
               const SizedBox(height: 10),
               for (final photo in remove.take(8))
-                Text(
-                  photo.relativePath,
-                  style: const TextStyle(fontSize: 12),
-                ),
+                Text(photo.relativePath, style: const TextStyle(fontSize: 12)),
               if (remove.length > 8)
                 Text(
                   'and ${remove.length - 8} more…',
@@ -4169,7 +4325,9 @@ class _LibraryPageState extends State<LibraryPage> {
               child: Tooltip(
                 message: _moments
                     ? (selected ? 'Selected for sharing' : 'Select for sharing')
-                    : (selected ? 'This photo will be kept' : 'Keep this photo'),
+                    : (selected
+                          ? 'This photo will be kept'
+                          : 'Keep this photo'),
                 child: InkResponse(
                   onTap: selected
                       ? null
@@ -4312,7 +4470,10 @@ class _LibraryPageState extends State<LibraryPage> {
                   ranking == null
                       ? 'No ranking is available for this group.'
                       : '${ranking.headline}. Scores compare these photos with each other only; they are not a rating of the photo itself.',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF77796F),
+                  ),
                 ),
                 if (canFilter)
                   Align(
@@ -4332,23 +4493,23 @@ class _LibraryPageState extends State<LibraryPage> {
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final photo in group.bestFirst.where(
-                          (candidate) =>
-                              !finalistsOnly ||
-                              (ranking?.shotFor(candidate.uri)?.isFinalist ??
-                                  true),
-                        ))
-                          _compareColumn(
-                            group,
-                            photo,
-                            bestSharpness,
-                            dialogContext,
-                            setDialogState,
-                          ),
-                      ],
-                    ),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final photo in group.bestFirst.where(
+                            (candidate) =>
+                                !finalistsOnly ||
+                                (ranking?.shotFor(candidate.uri)?.isFinalist ??
+                                    true),
+                          ))
+                            _compareColumn(
+                              group,
+                              photo,
+                              bestSharpness,
+                              dialogContext,
+                              setDialogState,
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -4445,11 +4606,7 @@ class _LibraryPageState extends State<LibraryPage> {
             for (final reason in shot.strengths)
               line(Icons.check_circle_outline, _green, reason),
             for (final reason in shot.concerns)
-              line(
-                Icons.error_outline,
-                const Color(0xFFB37957),
-                reason,
-              ),
+              line(Icons.error_outline, const Color(0xFFB37957), reason),
             if (shot.isDisqualified)
               line(
                 Icons.block,
@@ -4505,7 +4662,9 @@ class _LibraryPageState extends State<LibraryPage> {
                       setDialogState(() {});
                     },
                     icon: const Icon(Icons.check, size: 16),
-                    label: Text('Your pick · save ${_formatBytes(saves)} · undo'),
+                    label: Text(
+                      'Your pick · save ${_formatBytes(saves)} · undo',
+                    ),
                   )
                 : FilledButton.tonal(
                     onPressed: () {
@@ -4707,12 +4866,11 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _openSettings() => Navigator.of(context).push<void>(
     MaterialPageRoute(
-      builder: (_) =>
-          SettingsPage(
-            initial: _settings,
-            onChanged: _updateSettings,
-            showVideoSettings: _videoEnabled,
-          ),
+      builder: (_) => SettingsPage(
+        initial: _settings,
+        onChanged: _updateSettings,
+        showVideoSettings: _videoEnabled,
+      ),
     ),
   );
 
@@ -4743,7 +4901,9 @@ String _noGroupsText(FolderScanResult scan, {required bool bestShots}) {
   if (scan.imagesScanned == 0 && scan.imagesOutsideDateRange > 0) {
     return 'Found ${scan.imagesOutsideDateRange} photos in "${scan.folderName}", but none from ${scan.rangeDescription}. Tap New scan and choose Last 30 days or Current folder.${_skippedNote(scan.imagesSkipped)}';
   }
-  final what = bestShots ? 'No similar shots found.' : 'No exact duplicates found.';
+  final what = bestShots
+      ? 'No similar shots found.'
+      : 'No exact duplicates found.';
   return 'Scanned ${scan.imagesScanned} images (${scan.rangeDescription}). $what${_skippedNote(scan.imagesSkipped)}';
 }
 

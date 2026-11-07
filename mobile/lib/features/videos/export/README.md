@@ -1,1 +1,1 @@
-Saving or sharing processed videos as new files (planned).
+Best Moments can currently export a 1080 x 1920 MP4 slideshow reel from its selected photos on Android. The full photo frame is preserved with letterboxing as needed; slides are three seconds with crossfades. An MP3 or M4A mono/stereo audio file from the phone can optionally be added and is trimmed to the reel duration. Saving or sharing processed source videos remains planned.

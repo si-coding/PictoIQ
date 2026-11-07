@@ -15,7 +15,7 @@ class FeatureFlags {
   /// Videos on (true) or off (false) when no `PICTOIQ_VIDEO` define is given.
   static const bool defaultVideoEnabled = bool.fromEnvironment(
     'PICTOIQ_VIDEO',
-    defaultValue: true,
+    defaultValue: false,
   );
 
   /// The flags this build runs with.
