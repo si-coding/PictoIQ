@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <group
+        android:pivotX="512"
+        android:pivotY="512"
+        android:scaleX="0.8"
+        android:scaleY="0.8">
+        <path
+            android:fillColor="#F4F3E9"
+            android:pathData="M161,384c0,-54 44,-98 98,-98h104l67,-85h164l67,85h104c54,0 98,44 98,98v346c0,54 -44,98 -98,98H259c-54,0 -98,-44 -98,-98z" />
+        <path
+            android:fillColor="#183F3A"
+            android:pathData="M512,350a204,204 0,1 0,0 408a204,204 0,1 0,0 -408" />
+        <path
+            android:fillColor="#86C6A4"
+            android:pathData="M512,384a170,170 0,1 0,0 340a170,170 0,1 0,0 -340" />
+        <path
+            android:fillColor="#467B68"
+            android:pathData="M512,421a133,133 0,1 0,0 266a133,133 0,1 0,0 -266" />
+        <path
+            android:fillColor="#264F49"
+            android:pathData="M512,480a74,74 0,1 0,0 148a74,74 0,1 0,0 -148" />
+        <path
+            android:fillColor="#C9E7BD"
+            android:pathData="M480,497a22,22 0,1 0,0 44a22,22 0,1 0,0 -44"
+            android:fillAlpha="0.9" />
+        <path
+            android:fillColor="#FFD479"
+            android:pathData="M766,166l22,54 54,22 -54,22 -22,54 -22,-54 -54,-22 54,-22z" />
+        <path
+            android:fillColor="#FFD479"
+            android:pathData="M856,337a12,12 0,1 0,0 24a12,12 0,1 0,0 -24"
+            android:fillAlpha="0.8" />
+        <path
+            android:fillColor="#ED9C72"
+            android:pathData="M763,646a92,92 0,1 0,0 184a92,92 0,1 0,0 -184" />
+        <path
+            android:fillColor="#00000000"
+            android:pathData="M720,739l29,29 59,-68"
+            android:strokeColor="#FFFAF0"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="25" />
+    </group>
+</vector>

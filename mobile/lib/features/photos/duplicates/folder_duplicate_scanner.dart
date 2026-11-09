@@ -206,10 +206,17 @@ enum FolderDateRange {
 }
 
 class FolderSelection {
-  const FolderSelection({required this.uri, required this.name});
+  const FolderSelection({
+    required this.uri,
+    required this.name,
+    this.albumId,
+    this.count,
+  });
 
   final String uri;
   final String name;
+  final String? albumId;
+  final int? count;
 }
 
 class FolderDuplicateGroup {
@@ -535,6 +542,8 @@ class MediaAlbum {
   FolderSelection get selection => FolderSelection(
     uri: '${FolderDuplicateScanner.albumPrefix}$id',
     name: name,
+    albumId: id,
+    count: count,
   );
 }
 

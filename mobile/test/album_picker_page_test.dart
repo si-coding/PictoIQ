@@ -11,18 +11,15 @@ const _albums = [
   MediaAlbum(id: 'one', name: 'Screenshots', count: 1),
 ];
 
-Widget _host(
-  Widget page,
-  void Function(Object?) onResult,
-) => MaterialApp(
+Widget _host(Widget page, void Function(Object?) onResult) => MaterialApp(
   home: Builder(
     builder: (context) => Scaffold(
       body: Center(
         child: TextButton(
-          onPressed: () async =>
-              onResult(await Navigator.of(context).push<Object>(
-                MaterialPageRoute<Object>(builder: (_) => page),
-              )),
+          onPressed: () async => onResult(
+            await Navigator.of(context)
+                .push<Object>(MaterialPageRoute<Object>(builder: (_) => page)),
+          ),
           child: const Text('open'),
         ),
       ),
@@ -64,6 +61,8 @@ void main() {
     await tester.pumpAndSettle();
     final chosen = result as FolderSelection;
     expect(chosen.uri, '${FolderDuplicateScanner.albumPrefix}cam');
+    expect(chosen.albumId, 'cam');
+    expect(chosen.count, 1800);
   });
 
   testWidgets('going back from an album keeps the list open', (tester) async {
@@ -107,7 +106,10 @@ void main() {
     Object? result;
     await tester.pumpWidget(
       _host(
-        _page(access: () async => false, onSettings: () => settingsOpened = true),
+        _page(
+          access: () async => false,
+          onSettings: () => settingsOpened = true,
+        ),
         (value) => result = value,
       ),
     );
