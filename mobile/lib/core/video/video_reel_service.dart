@@ -37,6 +37,7 @@ class VideoReelService {
     }
 
     final directory = await getTemporaryDirectory();
+    await _deleteOldReels(directory);
     final outputPath = p.join(
       directory.path,
       'pictoiq_best_moments_${DateTime.now().microsecondsSinceEpoch}.mp4',
@@ -74,6 +75,28 @@ class VideoReelService {
       throw StateError('The video encoder did not create a usable reel.');
     }
     return resultPath;
+  }
+}
+
+/// Removes reels left over from earlier runs. Each reel is only needed until
+/// it has been shared, so they must not pile up in the cache.
+Future<void> _deleteOldReels(Directory directory) async {
+  try {
+    if (!await directory.exists()) return;
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (name.startsWith('pictoiq_best_moments_') &&
+          name.endsWith('.mp4')) {
+        try {
+          await entity.delete();
+        } catch (_) {
+          // A reel that is still open elsewhere is left for next time.
+        }
+      }
+    }
+  } catch (_) {
+    // Cleaning up is best effort; creating the reel does not depend on it.
   }
 }
 

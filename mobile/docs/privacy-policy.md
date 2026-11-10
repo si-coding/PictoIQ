@@ -2,7 +2,7 @@
 
 Last updated: [DATE]
 
-PictoIQ ("the app") helps you find the best shot among similar photos and remove exact duplicates, on your own phone. This policy explains what the app does with your information.
+PictoIQ ("the app") helps you find your best photos and moments, remove exact duplicate photos and videos, clear out clutter such as screenshots, and make short photo reels to share, on your own phone. This policy explains what the app does with your information.
 
 ## Your photos stay on your device
 
@@ -15,7 +15,15 @@ PictoIQ ("the app") helps you find the best shot among similar photos and remove
 
 - It creates small previews and numerical fingerprints (such as colour and sharpness measurements) to group similar photos and suggest the best one. These are kept in memory while the app is open and are not saved or sent anywhere.
 - It detects whether faces are present, whether eyes are open and whether people are smiling, using Google ML Kit's on-device face detection. It does **not** identify who anyone is and does not compare people with each other beyond counting faces and comparing clothing colours inside the same scan.
-- It deletes a photo **only** after you confirm in the app, and Android may ask you to confirm again. Deleted photos are removed from your phone's photo library or from the folder you chose.
+- Videos are read only to find exact duplicate copies (their length, picture size and a fingerprint of the file). PictoIQ does not watch, analyse or upload your videos. You can play a video from the album screen so you can see it before choosing.
+- Clutter finds screenshots, documents, blank or dark, blurry and tiny photos using the same on-device measurements.
+- It deletes a photo or video **only** after you confirm in the app, and Android may ask you to confirm again. Deleted photos are removed from your phone's photo library or from the folder you chose.
+
+## Photo reels and audio
+
+- A reel is a short video made on your phone from photos you selected. PictoIQ builds it on the device with Android's own video encoder and opens Android's share sheet; nothing is uploaded by PictoIQ. What happens next depends on the app you share it to.
+- If you add music, you choose an audio file with Android's file picker. PictoIQ copies it to its private cache for the length of the job and removes it afterwards. PictoIQ does not use the microphone and does not ask for audio permissions.
+- The finished reel and the copies of the photos made for sharing are kept in the app's temporary cache and replaced the next time you make one. Clearing the app's storage in Android settings removes them.
 
 ## Information stored on your device
 

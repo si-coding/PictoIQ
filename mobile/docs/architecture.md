@@ -64,3 +64,7 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact Dupl
 ## Feature flags
 
 `core/config/feature_flags.dart` (`FeatureFlags.current.videoEnabled`, from `--dart-define=PICTOIQ_VIDEO`). `main.dart` reads it to show or hide the Photos | Videos switch, `SettingsPage(showVideoSettings:)` hides the Videos section, and `FolderDuplicateScanner.requestMediaAccess` asks for photo access only when videos are off. Video code is not otherwise touched; it is simply never reached.
+
+## Photo reels
+
+`features/videos/export/reel_configuration_page.dart` is the editor (title, title style, audio, drag to reorder; the whole page scrolls and the photo grid auto-scrolls while dragging). `core/video/video_reel_service.dart` talks to Android over the `com.pictoiq.app/video_reel` channels; `PhotoReelEncoder.kt` draws each frame (1080x1920, 30 fps, H.264), re-encodes the chosen audio to AAC, trims it to the reel length and muxes both into one MP4. Old reels are deleted from the cache before a new one is made.

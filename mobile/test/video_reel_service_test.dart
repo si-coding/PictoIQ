@@ -119,4 +119,27 @@ void main() {
 
     expect(cancellationRequested, isTrue);
   });
+
+  test('deletes reels left over from earlier runs but nothing else', () async {
+    final oldReel = File('${tempDirectory.path}/pictoiq_best_moments_1.mp4');
+    final other = File('${tempDirectory.path}/keep.txt');
+    await oldReel.writeAsBytes([1]);
+    await other.writeAsBytes([1]);
+    messenger.setMockMethodCallHandler(reelChannel, (call) async {
+      final arguments = call.arguments as Map<Object?, Object?>;
+      final outputPath = arguments['outputPath'] as String;
+      await File(outputPath).writeAsBytes([1, 2, 3]);
+      return outputPath;
+    });
+
+    await VideoReelService().createReel(
+      ['first.jpg'],
+      secondsPerPhoto: 3,
+      transitionMillis: 400,
+      titleStyle: 'clean',
+    );
+
+    expect(await oldReel.exists(), isFalse);
+    expect(await other.exists(), isTrue);
+  });
 }

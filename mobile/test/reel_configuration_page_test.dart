@@ -151,7 +151,7 @@ void main() {
     );
   });
 
-  testWidgets('photo preview scrolls independently from the editor controls', (
+  testWidgets('the whole page scrolls so every photo preview can be reached', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 1000);
@@ -160,31 +160,27 @@ void main() {
     final progress = StreamController<double>.broadcast();
     addTearDown(progress.close);
     final photos = [
-      for (var index = 0; index < 6; index++) photo('file:///photo-$index.jpg'),
+      for (var index = 0; index < 15; index++)
+        photo('file:///photo-$index.jpg'),
     ];
 
     await tester.pumpWidget(
       page(photos: photos, progress: progress.stream, onCreate: (_) async {}),
     );
 
-    expect(
-      find.text(
-        'Press and hold a photo, then drag it onto another photo to change the order.',
-      ),
-      findsOneWidget,
-    );
     expect(find.text('Text on the first photo (optional)'), findsOneWidget);
     expect(find.text('Photo preview · drag to reorder'), findsOneWidget);
+    expect(find.byType(Scrollbar), findsOneWidget);
 
-    final previewScroll = find.descendant(
-      of: find.byType(GridView),
-      matching: find.byType(Scrollable),
+    final lastPhoto = find.byKey(
+      const ValueKey('reel-photo-file:///photo-14.jpg'),
     );
-    final sixthPhoto = find.byKey(
-      const ValueKey('reel-photo-file:///photo-5.jpg'),
+    await tester.scrollUntilVisible(
+      lastPhoto,
+      300,
+      scrollable: find.byType(Scrollable).first,
     );
-    await tester.scrollUntilVisible(sixthPhoto, 200, scrollable: previewScroll);
-    expect(sixthPhoto, findsOneWidget);
-    expect(find.text('Create your reel'), findsOneWidget);
+    expect(lastPhoto, findsOneWidget);
+    expect(find.text('Create reel'), findsOneWidget);
   });
 }

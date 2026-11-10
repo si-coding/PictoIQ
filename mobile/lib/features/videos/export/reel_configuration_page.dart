@@ -63,6 +63,10 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
   bool _cancelling = false;
   double _progress = 0;
   StreamSubscription<double>? _progressSubscription;
+  final _scrollController = ScrollController();
+  final _scrollKey = GlobalKey();
+  Timer? _autoScrollTimer;
+  double _autoScrollStep = 0;
 
   @override
   void initState() {
@@ -77,6 +81,39 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
         debugPrint('Reel progress updates failed: $error\n$stack');
       },
     );
+  }
+
+  /// Scrolls the page while a photo is dragged near the top or bottom edge,
+  /// so a photo can be moved further than the screen shows.
+  void _autoScroll(double pointerY) {
+    final box = _scrollKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+    const zone = 90.0;
+    if (pointerY < top + zone) {
+      _autoScrollStep = -14;
+    } else if (pointerY > bottom - zone) {
+      _autoScrollStep = 14;
+    } else {
+      _stopAutoScroll();
+      return;
+    }
+    _autoScrollTimer ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+      if (!_scrollController.hasClients) return;
+      final position = _scrollController.position;
+      _scrollController.jumpTo(
+        (position.pixels + _autoScrollStep).clamp(
+          position.minScrollExtent,
+          position.maxScrollExtent,
+        ),
+      );
+    });
+  }
+
+  void _stopAutoScroll() {
+    _autoScrollTimer?.cancel();
+    _autoScrollTimer = null;
   }
 
   Future<void> _chooseAudio() async {
@@ -198,6 +235,8 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
   @override
   void dispose() {
     unawaited(_progressSubscription?.cancel());
+    _stopAutoScroll();
+    _scrollController.dispose();
     _titleController.dispose();
     final audioPath = _audioPath;
     if (audioPath != null) {
@@ -215,8 +254,13 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
         appBar: AppBar(title: const Text('Create your reel')),
         body: AbsorbPointer(
           absorbing: _creating,
-          child: CustomScrollView(
-            slivers: [
+          child: Scrollbar(
+            controller: _scrollController,
+            thumbVisibility: true,
+            child: CustomScrollView(
+              key: _scrollKey,
+              controller: _scrollController,
+              slivers: [
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
                 sliver: SliverToBoxAdapter(
@@ -344,57 +388,55 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
               ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                sliver: SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 370,
-                    child: GridView.builder(
-                      primary: false,
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: EdgeInsets.zero,
-                      itemCount: _photos.length,
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 2,
-                            crossAxisSpacing: 10,
-                            mainAxisSpacing: 10,
-                            childAspectRatio: .86,
-                          ),
-                      itemBuilder: (context, index) {
-                        final photo = _photos[index];
-                        return DragTarget<FolderScanPhoto>(
-                          key: ValueKey('reel-photo-${photo.uri}'),
-                          onAcceptWithDetails: (details) =>
-                              _movePhoto(details.data, photo),
-                          builder: (context, candidates, rejected) =>
-                              LongPressDraggable<FolderScanPhoto>(
-                                data: photo,
-                                dragAnchorStrategy: pointerDragAnchorStrategy,
-                                feedback: Material(
-                                  color: Colors.transparent,
-                                  child: SizedBox(
-                                    width: 150,
-                                    height: 175,
-                                    child: _photoPreview(photo, index, title),
-                                  ),
-                                ),
-                                childWhenDragging: Opacity(
-                                  opacity: .35,
-                                  child: _photoCard(photo, index, title),
-                                ),
-                                child: _photoCard(
-                                  photo,
-                                  index,
-                                  title,
-                                  isDropTarget: candidates.isNotEmpty,
+                sliver: SliverGrid(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                    childAspectRatio: .86,
+                  ),
+                  delegate: SliverChildBuilderDelegate(
+                    (context, index) {
+                      final photo = _photos[index];
+                      return DragTarget<FolderScanPhoto>(
+                        key: ValueKey('reel-photo-${photo.uri}'),
+                        onAcceptWithDetails: (details) =>
+                            _movePhoto(details.data, photo),
+                        builder: (context, candidates, rejected) =>
+                            LongPressDraggable<FolderScanPhoto>(
+                              data: photo,
+                              dragAnchorStrategy: pointerDragAnchorStrategy,
+                              onDragUpdate: (details) =>
+                                  _autoScroll(details.globalPosition.dy),
+                              onDragEnd: (_) => _stopAutoScroll(),
+                              onDraggableCanceled: (_, _) => _stopAutoScroll(),
+                              feedback: Material(
+                                color: Colors.transparent,
+                                child: SizedBox(
+                                  width: 150,
+                                  height: 175,
+                                  child: _photoPreview(photo, index, title),
                                 ),
                               ),
-                        );
-                      },
-                    ),
+                              childWhenDragging: Opacity(
+                                opacity: .35,
+                                child: _photoCard(photo, index, title),
+                              ),
+                              child: _photoCard(
+                                photo,
+                                index,
+                                title,
+                                isDropTarget: candidates.isNotEmpty,
+                              ),
+                            ),
+                      );
+                    },
+                    childCount: _photos.length,
                   ),
                 ),
               ),
-            ],
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: SafeArea(

@@ -189,6 +189,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // Stop an encode that is still running; nobody is waiting for it.
+        cancelReelRequested = true
         reelProgressSink = null
         pendingAudioPicker?.error("activity_closed", "The audio picker was closed.", null)
         pendingAudioPicker = null
