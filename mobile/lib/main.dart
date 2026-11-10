@@ -25,6 +25,7 @@ import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
 import 'package:pictoiq_mobile/features/settings/settings_page.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates_page.dart';
+import 'package:pictoiq_mobile/features/videos/export/reel_configuration_page.dart';
 import 'package:pictoiq_mobile/features/videos/library/video_album_picker_page.dart';
 import 'package:pictoiq_mobile/shared/shot_ranking.dart' show RankedShot;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
@@ -255,6 +256,8 @@ class _LibraryPageState extends State<LibraryPage> {
   bool _importing = false;
   bool _scanningFolder = false;
   bool _creatingReel = false;
+  bool _cancelReelRequested = false;
+  bool _reelNativeStarted = false;
   bool _scanningBestShots = false;
   bool _duplicatesOnly = false;
   _PhotoSort _sort = _PhotoSort.recent;
@@ -516,76 +519,66 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _createPhotoReel(FolderScanResult scan) async {
     if (_creatingReel) return;
-    final photos = _picksToShare(scan.duplicateGroups);
+    final photos = _picksToShare(scan.duplicateGroups)
+        .take(_settings.reelMaxPhotos)
+        .toList();
     if (photos.isEmpty) {
       _showMessage('No selected photos are available to add to a reel.');
       return;
     }
 
-    final addAudio = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add music to your reel?'),
-        content: const Text(
-          'Choose an audio file from your phone, or continue without audio.',
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => ReelConfigurationPage(
+          photos: photos,
+          maxPhotos: _settings.reelMaxPhotos,
+          secondsPerPhoto: _settings.reelSecondsPerPhoto,
+          transitionMillis: _settings.reelTransitionMillis,
+          titleStyle: _settings.reelTitleStyle,
+          pickAudio: _videoReelService.pickAudio,
+          discardAudio: _videoReelService.discardAudio,
+          reelProgress: _videoReelService.progress,
+          onCreate: _exportConfiguredReel,
+          onCancel: _cancelPhotoReel,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('No audio'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Choose audio'),
-          ),
-        ],
       ),
     );
-    if (!mounted || addAudio == null) return;
+  }
 
-    String? audioPath;
-    if (addAudio) {
-      try {
-        audioPath = await _videoReelService.pickAudio();
-        if (!mounted) return;
-        if (audioPath == null) return;
-      } catch (error, stack) {
-        debugPrint('Audio selection failed: $error\n$stack');
-        if (mounted) _showMessage('Could not select an audio file.');
-        return;
-      }
-    }
-
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _exportConfiguredReel(ReelConfiguration configuration) async {
+    if (_creatingReel) return;
+    _cancelReelRequested = false;
+    _reelNativeStarted = false;
     setState(() => _creatingReel = true);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(content: Text('Preparing your selected photos…')),
-      );
     try {
-      final paths = await _folderScanner.prepareForSharing(photos);
-      if (paths.length != photos.length) {
+      final paths = await _folderScanner.prepareForSharing(
+        configuration.photos,
+      );
+      if (paths.length != configuration.photos.length) {
         throw StateError('Not all selected photos could be read.');
       }
       if (!mounted) return;
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text('Creating a reel from ${paths.length} photos…'),
-          ),
+      if (_cancelReelRequested) {
+        throw const ReelCreationCancelledException();
+      }
+      final String reelPath;
+      try {
+        reelPath = await _videoReelService.createReel(
+          paths,
+          audioPath: configuration.audioPath,
+          secondsPerPhoto: _settings.reelSecondsPerPhoto,
+          transitionMillis: _settings.reelTransitionMillis,
+          title: configuration.title,
+          titleStyle: configuration.titleStyle.name,
+          isCancellationRequested: () => _cancelReelRequested,
+          onNativeCreationStarted: () {
+            _reelNativeStarted = true;
+          },
         );
-      final reelPath = await _videoReelService.createReel(
-        paths,
-        audioPath: audioPath,
-      );
+      } finally {
+        _reelNativeStarted = false;
+      }
       if (!mounted) return;
-      messenger.hideCurrentSnackBar();
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(reelPath)],
@@ -593,18 +586,20 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       );
     } catch (error, stack) {
+      if (error is ReelCreationCancelledException) return;
       debugPrint('Photo reel failed: $error\n$stack');
-      if (mounted) {
-        messenger
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(
-              content: Text('Could not create the reel. Please try again.'),
-            ),
-          );
-      }
+      rethrow;
     } finally {
+      _reelNativeStarted = false;
+      _cancelReelRequested = false;
       if (mounted) setState(() => _creatingReel = false);
+    }
+  }
+
+  Future<void> _cancelPhotoReel() async {
+    _cancelReelRequested = true;
+    if (_reelNativeStarted) {
+      await _videoReelService.cancelReelCreation();
     }
   }
 
@@ -2420,42 +2415,46 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
           ),
           const SizedBox(width: 10),
-          const Text(
-            'picto',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -.7,
-            ),
-          ),
-          const Text(
-            'iq',
-            style: TextStyle(
-              color: _green,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -.7,
-            ),
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'picto',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -.7,
+                    ),
+                  ),
+                  Text(
+                    'iq',
+                    style: TextStyle(
+                      color: _green,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -.7,
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                'Your memories, made smarter',
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.05,
+                  fontStyle: FontStyle.italic,
+                  fontWeight: FontWeight.w600,
+                  color: _green,
+                ),
+              ),
+            ],
           ),
           const Spacer(),
         ],
-      ),
-      const Padding(
-        padding: EdgeInsets.only(top: 7, left: 48),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Your memories, made smarter',
-              style: TextStyle(
-                fontSize: 13,
-                fontStyle: FontStyle.italic,
-                fontWeight: FontWeight.w600,
-                color: _green,
-              ),
-            ),
-          ],
-        ),
       ),
     ],
   );

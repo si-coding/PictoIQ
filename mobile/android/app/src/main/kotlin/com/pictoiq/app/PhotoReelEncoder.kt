@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
@@ -21,33 +23,83 @@ import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.CancellationException
 import kotlin.math.min
 
 internal class PhotoReelEncoder {
-    fun create(imagePaths: List<String>, outputPath: String, audioPath: String?): String {
+    fun create(
+        imagePaths: List<String>,
+        outputPath: String,
+        audioPath: String?,
+        secondsPerPhoto: Int,
+        transitionMillis: Int,
+        title: String,
+        titleStyle: String,
+        shouldCancel: () -> Boolean,
+        onProgress: (Double) -> Unit,
+    ): String {
         require(imagePaths.isNotEmpty()) { "Choose at least one photo." }
-        if (audioPath == null) return createVideoOnly(imagePaths, outputPath)
+        require(secondsPerPhoto in 2..6) { "Photo duration must be from 2 to 6 seconds." }
+        require(transitionMillis in setOf(0, 250, 400, 500, 750, 1000)) {
+            "The reel transition duration is not supported."
+        }
+        val durationUs = imagePaths.size * secondsPerPhoto * 1_000_000L
+        if (audioPath == null) {
+            return createVideoOnly(
+                imagePaths,
+                outputPath,
+                secondsPerPhoto,
+                transitionMillis,
+                title,
+                titleStyle,
+                shouldCancel,
+                onProgress,
+            )
+        }
 
         val outputFile = File(outputPath)
         val videoFile = File(outputPath + ".video.mp4")
         val audioFile = File(outputPath + ".audio.m4a")
         try {
-            createVideoOnly(imagePaths, videoFile.absolutePath)
-            encodeAudio(audioPath, audioFile.absolutePath, imagePaths.size * PHOTO_DURATION_US)
+            createVideoOnly(
+                imagePaths,
+                videoFile.absolutePath,
+                secondsPerPhoto,
+                transitionMillis,
+                title,
+                titleStyle,
+                shouldCancel,
+            ) { progress -> onProgress(progress * VIDEO_PROGRESS_WEIGHT) }
+            encodeAudio(audioPath, audioFile.absolutePath, durationUs, shouldCancel)
+            onProgress(AUDIO_PROGRESS_WEIGHT)
             muxVideoAndAudio(
                 videoFile.absolutePath,
                 audioFile.absolutePath,
                 outputFile.absolutePath,
-                imagePaths.size * PHOTO_DURATION_US,
+                durationUs,
+                shouldCancel,
             )
+            onProgress(1.0)
             return outputFile.absolutePath
+        } catch (error: Exception) {
+            outputFile.delete()
+            throw error
         } finally {
             videoFile.delete()
             audioFile.delete()
         }
     }
 
-    private fun createVideoOnly(imagePaths: List<String>, outputPath: String): String {
+    private fun createVideoOnly(
+        imagePaths: List<String>,
+        outputPath: String,
+        secondsPerPhoto: Int,
+        transitionMillis: Int,
+        title: String,
+        titleStyle: String,
+        shouldCancel: () -> Boolean,
+        onProgress: (Double) -> Unit,
+    ): String {
         require(imagePaths.isNotEmpty()) { "Choose at least one photo." }
         val outputFile = File(outputPath)
         outputFile.parentFile?.let {
@@ -132,31 +184,53 @@ internal class PhotoReelEncoder {
             val frame = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(frame)
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val framesPerPhoto = FRAME_RATE * secondsPerPhoto
+            val fadeFrames = (FRAME_RATE * transitionMillis / 1000).coerceIn(
+                0,
+                framesPerPhoto - 1,
+            )
+            val totalFrames = imagePaths.size * framesPerPhoto
+            var completedFrames = 0
+            var lastReportedPercent = -1
             var previous: Bitmap? = null
             var current = decodePhoto(imagePaths.first())
             try {
                 for (photoIndex in imagePaths.indices) {
+                    ensureNotCancelled(shouldCancel)
                     if (photoIndex > 0) {
                         val next = decodePhoto(imagePaths[photoIndex])
                         previous?.recycle()
                         previous = current
                         current = next
                     }
-                    for (frameIndex in 0 until FRAMES_PER_PHOTO) {
-                        val transition = if (frameIndex < FADE_FRAMES) {
-                            frameIndex.toFloat() / (FADE_FRAMES - 1)
+                    for (frameIndex in 0 until framesPerPhoto) {
+                        ensureNotCancelled(shouldCancel)
+                        val isTransition = photoIndex > 0 &&
+                            fadeFrames > 0 &&
+                            frameIndex < fadeFrames
+                        val transition = if (isTransition) {
+                            frameIndex.toFloat() / (fadeFrames - 1).coerceAtLeast(1)
                         } else {
                             1f
                         }
                         canvas.drawColor(Color.BLACK)
-                        if (previous != null && transition < 1f) {
-                            drawPhoto(canvas, previous, 1f - transition, paint)
+                        if (isTransition) {
+                            drawPhoto(canvas, previous!!, 1f - transition, paint)
                         }
                         drawPhoto(canvas, current, transition, paint)
+                        if (photoIndex == 0 && title.isNotBlank()) {
+                            drawTitle(canvas, title, titleStyle)
+                        }
                         renderer.draw(
                             frame,
-                            (photoIndex * FRAMES_PER_PHOTO + frameIndex) * FRAME_DURATION_NS,
+                            (photoIndex * framesPerPhoto + frameIndex) * FRAME_DURATION_NS,
                         )
+                        completedFrames += 1
+                        val percent = completedFrames * 100 / totalFrames
+                        if (percent != lastReportedPercent) {
+                            onProgress(percent / 100.0)
+                            lastReportedPercent = percent
+                        }
                         drain(endOfStream = false)
                     }
                 }
@@ -252,7 +326,58 @@ internal class PhotoReelEncoder {
         canvas.restore()
     }
 
-    private fun encodeAudio(audioPath: String, outputPath: String, durationUs: Long) {
+    private fun drawTitle(canvas: Canvas, title: String, style: String) {
+        val text = title.trim().take(60)
+        if (text.isEmpty()) return
+        val elegant = style == "elegant"
+        val bold = style == "bold"
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (bold) Color.rgb(255, 212, 121) else Color.WHITE
+            textSize = 58f
+            typeface = when {
+                elegant -> Typeface.create("serif", Typeface.ITALIC)
+                bold -> Typeface.create("sans-serif", Typeface.BOLD)
+                else -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            }
+        }
+        val maxTextWidth = WIDTH - 180f
+        while (textPaint.measureText(text) > maxTextWidth && textPaint.textSize > 30f) {
+            textPaint.textSize -= 2f
+        }
+        val measuredWidth = textPaint.measureText(text)
+        val horizontalPadding = 32f
+        val verticalPadding = 24f
+        val textHeight = textPaint.fontMetrics.run { descent - ascent }
+        val box = RectF(
+            (WIDTH - measuredWidth - horizontalPadding * 2) / 2f,
+            HEIGHT - 300f,
+            (WIDTH + measuredWidth + horizontalPadding * 2) / 2f,
+            HEIGHT - 300f + textHeight + verticalPadding * 2,
+        )
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(175, 0, 0, 0)
+        }
+        canvas.drawRoundRect(box, 24f, 24f, backgroundPaint)
+        canvas.drawText(
+            text,
+            (WIDTH - measuredWidth) / 2f,
+            box.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f,
+            textPaint,
+        )
+    }
+
+    private fun ensureNotCancelled(shouldCancel: () -> Boolean) {
+        if (shouldCancel()) {
+            throw CancellationException("Reel creation was cancelled.")
+        }
+    }
+
+    private fun encodeAudio(
+        audioPath: String,
+        outputPath: String,
+        durationUs: Long,
+        shouldCancel: () -> Boolean,
+    ) {
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
         var encoder: MediaCodec? = null
@@ -306,6 +431,7 @@ internal class PhotoReelEncoder {
             fun drainEncoder(endOfStream: Boolean): Boolean {
                 var idleAttempts = 0
                 while (true) {
+                    ensureNotCancelled(shouldCancel)
                     when (
                         val index = activeEncoder.dequeueOutputBuffer(
                             encoderInfo,
@@ -354,8 +480,10 @@ internal class PhotoReelEncoder {
                 var submittedFrames = 0L
 
                 while (buffer.position() < endPosition) {
+                    ensureNotCancelled(shouldCancel)
                     var inputIndex = activeEncoder.dequeueInputBuffer(10_000L)
                     while (inputIndex < 0) {
+                        ensureNotCancelled(shouldCancel)
                         drainEncoder(endOfStream = false)
                         inputIndex = activeEncoder.dequeueInputBuffer(10_000L)
                     }
@@ -385,6 +513,7 @@ internal class PhotoReelEncoder {
             }
 
             while (!encoderOutputEnded) {
+                ensureNotCancelled(shouldCancel)
                 if (!decoderInputEnded) {
                     val inputIndex = activeDecoder.dequeueInputBuffer(10_000L)
                     if (inputIndex >= 0) {
@@ -477,6 +606,9 @@ internal class PhotoReelEncoder {
                 }
             }
             check(muxerStarted) { "The selected audio could not be encoded." }
+        } catch (error: Exception) {
+            File(outputPath).delete()
+            throw error
         } finally {
             extractor.release()
             if (decoderStarted) {
@@ -511,6 +643,7 @@ internal class PhotoReelEncoder {
         audioPath: String,
         outputPath: String,
         durationUs: Long,
+        shouldCancel: () -> Boolean,
     ) {
         val videoExtractor = MediaExtractor()
         val audioExtractor = MediaExtractor()
@@ -538,6 +671,7 @@ internal class PhotoReelEncoder {
                 (videoTime >= 0L && videoTime < durationUs) ||
                 (audioTime >= 0L && audioTime < durationUs)
             ) {
+                ensureNotCancelled(shouldCancel)
                 val writeVideo = audioTime < 0L ||
                     audioTime >= durationUs ||
                     (videoTime >= 0L && videoTime <= audioTime)
@@ -786,16 +920,15 @@ internal class PhotoReelEncoder {
         const val WIDTH = 1080
         const val HEIGHT = 1920
         const val FRAME_RATE = 30
-        const val FRAMES_PER_PHOTO = FRAME_RATE * 3
-        const val FADE_FRAMES = 12
         const val MAX_DECODE_EDGE = 1920
         const val BIT_RATE = 12_000_000
         const val AUDIO_BIT_RATE = 192_000
         const val AUDIO_AAC_MIME = "audio/mp4a-latm"
-        const val PHOTO_DURATION_US = 3_000_000L
         const val VIDEO_MUX_BUFFER_SIZE = 16 * 1024 * 1024
         const val AUDIO_MUX_BUFFER_SIZE = 1024 * 1024
         const val FRAME_DURATION_NS = 1_000_000_000L / FRAME_RATE
+        const val VIDEO_PROGRESS_WEIGHT = 0.9
+        const val AUDIO_PROGRESS_WEIGHT = 0.96
         const val EGL_RECORDABLE_ANDROID = 0x3142
         const val VERTEX_SHADER = """
             attribute vec4 aPosition;

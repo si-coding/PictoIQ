@@ -32,7 +32,10 @@ void main() {
 
     test('with no --dart-define the default applies', () {
       // Tests run without PICTOIQ_VIDEO, so this is the built-in default.
-      expect(FeatureFlags.current.videoEnabled, FeatureFlags.defaultVideoEnabled);
+      expect(
+        FeatureFlags.current.videoEnabled,
+        FeatureFlags.defaultVideoEnabled,
+      );
       expect(FeatureFlags.defaultVideoEnabled, isTrue);
     });
   });
@@ -40,6 +43,8 @@ void main() {
   group('Settings page', () {
     testWidgets('shows the Videos section when videos are on', (tester) async {
       await _showSettings(tester, showVideoSettings: true);
+      await tester.tap(find.text('Video'));
+      await tester.pumpAndSettle();
       expect(find.text('Copy to keep'), findsOneWidget);
     });
 

@@ -213,7 +213,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           if (widget.showVideoSettings)
             _section(
-              title: 'Videos',
+              title: 'Video',
               icon: Icons.videocam_outlined,
               note: 'Exact duplicate videos. Changes apply to the next scan.',
               children: [
@@ -229,6 +229,52 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ],
             ),
+          _section(
+            title: 'Reel',
+            icon: Icons.movie_creation_outlined,
+            note: 'Default photo count, timing and title style for new reels.',
+            children: [
+              _choice<int>(
+                title: 'Maximum photos in a reel',
+                values: const [5, 10, 15, 20, 30],
+                selected: _settings.reelMaxPhotos,
+                label: (count) => '$count',
+                onSelected: (count) =>
+                    _change(_settings.copyWith(reelMaxPhotos: count)),
+                note: 'Reels open with up to 15 photos by default.',
+              ),
+              _choice<int>(
+                title: 'Time per photo',
+                values: const [2, 3, 4, 5, 6],
+                selected: _settings.reelSecondsPerPhoto,
+                label: (seconds) => '${seconds}s',
+                onSelected: (seconds) => _change(
+                  _settings.copyWith(reelSecondsPerPhoto: seconds),
+                ),
+              ),
+              _choice<int>(
+                title: 'Transition between photos',
+                values: const [0, 250, 400, 500, 750, 1000],
+                selected: _settings.reelTransitionMillis,
+                label: (millis) => millis == 0 ? 'Off' : '${millis}ms',
+                onSelected: (millis) => _change(
+                  _settings.copyWith(reelTransitionMillis: millis),
+                ),
+              ),
+              _choice<ReelTitleStyle>(
+                title: 'Default title style',
+                values: ReelTitleStyle.values,
+                selected: _settings.reelTitleStyle,
+                label: (style) => switch (style) {
+                  ReelTitleStyle.clean => 'Clean',
+                  ReelTitleStyle.bold => 'Bold',
+                  ReelTitleStyle.elegant => 'Elegant',
+                },
+                onSelected: (style) =>
+                    _change(_settings.copyWith(reelTitleStyle: style)),
+              ),
+            ],
+          ),
           _section(
             title: 'Results',
             icon: Icons.view_agenda_outlined,
@@ -259,35 +305,21 @@ class _SettingsPageState extends State<SettingsPage> {
       elevation: 0,
       color: const Color(0xFFF4F6F1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, size: 20, color: _green),
-                const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ],
-            ),
-            if (note != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  note,
-                  style: const TextStyle(fontSize: 12, color: _muted),
-                ),
-              ),
-            ...children,
-          ],
+      child: ExpansionTile(
+        leading: Icon(icon, size: 20, color: _green),
+        title: Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
         ),
+        subtitle: note == null
+            ? null
+            : Text(
+                note,
+                style: const TextStyle(fontSize: 12, color: _muted),
+              ),
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        children: children,
       ),
     ),
   );

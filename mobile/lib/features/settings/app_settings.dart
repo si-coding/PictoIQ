@@ -12,6 +12,8 @@ import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart'
     show VideoKeep;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart' show DocumentMode, MatchLevel, TimeMode;
 
+enum ReelTitleStyle { clean, bold, elegant }
+
 /// Preferences that outlive one run of the app.
 class AppSettings {
   const AppSettings({
@@ -34,6 +36,10 @@ class AppSettings {
     this.clutterOff = const {},
     this.clutterBlur = ClutterBlur.balanced,
     this.videoKeep = VideoKeep.oldest,
+    this.reelMaxPhotos = 15,
+    this.reelSecondsPerPhoto = 3,
+    this.reelTransitionMillis = 400,
+    this.reelTitleStyle = ReelTitleStyle.clean,
   });
 
   /// When true, PictoIQ never picks a similar photo to keep: the user marks
@@ -100,6 +106,18 @@ class AppSettings {
   /// Exact duplicate videos: which video of a set is kept by default.
   final VideoKeep videoKeep;
 
+  /// Maximum photos included by default when opening the reel editor.
+  final int reelMaxPhotos;
+
+  /// How long each photo remains in the generated reel.
+  final int reelSecondsPerPhoto;
+
+  /// Crossfade duration between photos; zero disables transitions.
+  final int reelTransitionMillis;
+
+  /// Default style for an optional title on the first reel photo.
+  final ReelTitleStyle reelTitleStyle;
+
   AppSettings copyWith({
     bool? manualSelectionOnly,
     bool? useFaceSignals,
@@ -120,6 +138,10 @@ class AppSettings {
     Set<ClutterKind>? clutterOff,
     ClutterBlur? clutterBlur,
     VideoKeep? videoKeep,
+    int? reelMaxPhotos,
+    int? reelSecondsPerPhoto,
+    int? reelTransitionMillis,
+    ReelTitleStyle? reelTitleStyle,
   }) => AppSettings(
     manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
     useFaceSignals: useFaceSignals ?? this.useFaceSignals,
@@ -140,6 +162,10 @@ class AppSettings {
     clutterOff: clutterOff ?? this.clutterOff,
     clutterBlur: clutterBlur ?? this.clutterBlur,
     videoKeep: videoKeep ?? this.videoKeep,
+    reelMaxPhotos: reelMaxPhotos ?? this.reelMaxPhotos,
+    reelSecondsPerPhoto: reelSecondsPerPhoto ?? this.reelSecondsPerPhoto,
+    reelTransitionMillis: reelTransitionMillis ?? this.reelTransitionMillis,
+    reelTitleStyle: reelTitleStyle ?? this.reelTitleStyle,
   );
 
   Map<String, Object?> toJson() => {
@@ -162,6 +188,10 @@ class AppSettings {
     'clutterOff': [for (final kind in clutterOff) kind.name]..sort(),
     'clutterBlur': clutterBlur.name,
     'videoKeep': videoKeep.name,
+    'reelMaxPhotos': reelMaxPhotos,
+    'reelSecondsPerPhoto': reelSecondsPerPhoto,
+    'reelTransitionMillis': reelTransitionMillis,
+    'reelTitleStyle': reelTitleStyle.name,
   };
 
   /// Unknown or wrongly typed fields fall back to their defaults.
@@ -186,6 +216,10 @@ class AppSettings {
     final off = json['clutterOff'];
     final blur = json['clutterBlur'];
     final keep = json['videoKeep'];
+    final reelPhotos = json['reelMaxPhotos'];
+    final reelSeconds = json['reelSecondsPerPhoto'];
+    final reelTransition = json['reelTransitionMillis'];
+    final reelStyle = json['reelTitleStyle'];
     return AppSettings(
       manualSelectionOnly: manual is bool
           ? manual
@@ -249,6 +283,22 @@ class AppSettings {
         (value) => value.name == keep,
         orElse: () => defaults.videoKeep,
       ),
+      reelMaxPhotos: reelPhotos is int && reelPhotos >= 1 && reelPhotos <= 30
+          ? reelPhotos
+          : defaults.reelMaxPhotos,
+      reelSecondsPerPhoto:
+          reelSeconds is int && reelSeconds >= 2 && reelSeconds <= 6
+          ? reelSeconds
+          : defaults.reelSecondsPerPhoto,
+      reelTransitionMillis:
+          reelTransition is int &&
+              [0, 250, 400, 500, 750, 1000].contains(reelTransition)
+          ? reelTransition
+          : defaults.reelTransitionMillis,
+      reelTitleStyle: ReelTitleStyle.values.firstWhere(
+        (value) => value.name == reelStyle,
+        orElse: () => defaults.reelTitleStyle,
+      ),
     );
   }
 
@@ -274,10 +324,14 @@ class AppSettings {
       other.clutterOff.length == clutterOff.length &&
       other.clutterOff.containsAll(clutterOff) &&
       other.clutterBlur == clutterBlur &&
-      other.videoKeep == videoKeep;
+      other.videoKeep == videoKeep &&
+      other.reelMaxPhotos == reelMaxPhotos &&
+      other.reelSecondsPerPhoto == reelSecondsPerPhoto &&
+      other.reelTransitionMillis == reelTransitionMillis &&
+      other.reelTitleStyle == reelTitleStyle;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     manualSelectionOnly,
     useFaceSignals,
     groupSessions,
@@ -297,7 +351,11 @@ class AppSettings {
     Object.hashAll([for (final kind in clutterOff) kind.index]..sort()),
     clutterBlur,
     videoKeep,
-  );
+    reelMaxPhotos,
+    reelSecondsPerPhoto,
+    reelTransitionMillis,
+    reelTitleStyle,
+  ]);
 }
 
 /// Keeps [AppSettings] in a small JSON file in the app's private storage.

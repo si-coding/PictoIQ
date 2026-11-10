@@ -6,25 +6,51 @@ import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class MainActivity : FlutterActivity() {
     private val reelExecutor = Executors.newSingleThreadExecutor()
     private var pendingAudioPicker: MethodChannel.Result? = null
+    @Volatile
+    private var reelProgressSink: EventChannel.EventSink? = null
+    @Volatile
+    private var cancelReelRequested = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.pictoiq.app/video_reel/progress",
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                reelProgressSink = events
+            }
+
+            override fun onCancel(arguments: Any?) {
+                reelProgressSink = null
+            }
+        })
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.pictoiq.app/video_reel",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "pickReelAudio" -> pickReelAudio(result)
+                "discardReelAudio" -> {
+                    deletePickedAudio(call.argument<String>("audioPath"))
+                    result.success(null)
+                }
+                "cancelBestMomentsReel" -> {
+                    cancelReelRequested = true
+                    result.success(null)
+                }
                 "createBestMomentsReel" -> createBestMomentsReel(call, result)
                 else -> result.notImplemented()
             }
@@ -58,15 +84,49 @@ class MainActivity : FlutterActivity() {
         val imagePaths = call.argument<List<String>>("imagePaths")
         val outputPath = call.argument<String>("outputPath")
         val audioPath = call.argument<String>("audioPath")
+        val secondsPerPhoto = call.argument<Int>("secondsPerPhoto") ?: 3
+        val transitionMillis = call.argument<Int>("transitionMillis") ?: 400
+        val title = call.argument<String>("title").orEmpty().take(60)
+        val titleStyle = call.argument<String>("titleStyle") ?: "clean"
         if (imagePaths.isNullOrEmpty() || outputPath.isNullOrBlank()) {
             result.error("invalid_arguments", "Photos and output path are required.", null)
             return
         }
+        if (secondsPerPhoto !in 2..6 || transitionMillis !in setOf(0, 250, 400, 500, 750, 1000)) {
+            result.error("invalid_arguments", "Reel timing settings are out of range.", null)
+            return
+        }
+        if (titleStyle !in setOf("clean", "bold", "elegant")) {
+            result.error("invalid_arguments", "The title style is not supported.", null)
+            return
+        }
 
+        cancelReelRequested = false
+        reportReelProgress(0.0)
         reelExecutor.execute {
             try {
-                val path = PhotoReelEncoder().create(imagePaths, outputPath, audioPath)
-                Handler(Looper.getMainLooper()).post { result.success(path) }
+                val path = PhotoReelEncoder().create(
+                    imagePaths,
+                    outputPath,
+                    audioPath,
+                    secondsPerPhoto,
+                    transitionMillis,
+                    title,
+                    titleStyle,
+                    shouldCancel = { cancelReelRequested },
+                ) { progress -> reportReelProgress(progress) }
+                Handler(Looper.getMainLooper()).post {
+                    reelProgressSink?.success(1.0)
+                    result.success(path)
+                }
+            } catch (error: CancellationException) {
+                Handler(Looper.getMainLooper()).post {
+                    result.error(
+                        "reel_creation_cancelled",
+                        "Reel creation was cancelled.",
+                        null,
+                    )
+                }
             } catch (error: Exception) {
                 Handler(Looper.getMainLooper()).post {
                     result.error(
@@ -93,6 +153,12 @@ class MainActivity : FlutterActivity() {
             }
         } catch (error: Exception) {
             android.util.Log.w("PictoIq", "Could not remove the temporary audio copy.", error)
+        }
+    }
+
+    private fun reportReelProgress(progress: Double) {
+        Handler(Looper.getMainLooper()).post {
+            reelProgressSink?.success(progress.coerceIn(0.0, 1.0))
         }
     }
 
@@ -123,6 +189,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        reelProgressSink = null
         pendingAudioPicker?.error("activity_closed", "The audio picker was closed.", null)
         pendingAudioPicker = null
         reelExecutor.shutdown()
