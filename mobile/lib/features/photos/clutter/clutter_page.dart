@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_bar_title.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
-const _ink = Color(0xFF282B25);
-const _green = Color(0xFF54744C);
-const _canvas = Color(0xFFF7F8F4);
+const _ink = AppColors.ink;
+const _green = AppColors.primary;
 const _line = Color(0xFFE6E8E0);
 
 /// Review screen for photos that look like clutter (screenshots, documents,
@@ -18,6 +22,8 @@ class ClutterPage extends StatefulWidget {
     required this.rangeDescription,
     required this.deleteFiles,
     this.imagesSkipped = 0,
+    this.settingsPanel,
+    this.onFind,
   });
 
   final List<ClutterItem> items;
@@ -29,6 +35,12 @@ class ClutterPage extends StatefulWidget {
 
   /// Photos that could not be read, so were not checked.
   final int imagesSkipped;
+
+  /// Collapsible panel with the folder, date range and this tool's settings.
+  final Widget? settingsPanel;
+
+  /// Opens this tool's Find screen (the search icon in the top bar).
+  final VoidCallback? onFind;
 
   @override
   State<ClutterPage> createState() => _ClutterPageState();
@@ -107,7 +119,7 @@ class _ClutterPageState extends State<ClutterPage> {
                     '${item.kind.title} · ${_bytes(item.photo.size)}',
                     style: const TextStyle(
                       fontSize: 13,
-                      color: Color(0xFF596252),
+                      color: AppColors.body,
                     ),
                   ),
                 ],
@@ -191,24 +203,31 @@ class _ClutterPageState extends State<ClutterPage> {
   @override
   Widget build(BuildContext context) {
     final visible = _visible;
-    return Scaffold(
-      backgroundColor: _canvas,
+    return AppScaffold(
       appBar: AppBar(
-        backgroundColor: _canvas,
-        foregroundColor: _ink,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Back',
-          onPressed: _deleting ? null : () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Clutter',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        automaticallyImplyLeading: false,
+        actions: [
+          if (widget.onFind != null)
+            IconButton(
+              tooltip: 'Find in another folder or range',
+              onPressed: widget.onFind,
+              icon: const Icon(Icons.manage_search),
+            ),
+          AppHomeButton(enabled: !_deleting),
+          const AppMenuButton(),
+        ],
+        title: const AppBarTitle(
+          icon: Icons.cleaning_services_outlined,
+          title: 'Clutter',
         ),
       ),
       body: Column(
         children: [
+          if (widget.settingsPanel != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: widget.settingsPanel,
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Align(
@@ -227,7 +246,7 @@ class _ClutterPageState extends State<ClutterPage> {
                 style: const TextStyle(
                   fontSize: 13,
                   height: 1.35,
-                  color: Color(0xFF596252),
+                  color: AppColors.body,
                 ),
               ),
             ),
@@ -255,7 +274,7 @@ class _ClutterPageState extends State<ClutterPage> {
                           'Each photo is listed once, under its first reason.',
                       style: const TextStyle(
                         fontSize: 12,
-                        color: Color(0xFF77796F),
+                        color: AppColors.hint,
                       ),
                     ),
                   ),

@@ -1,16 +1,22 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_bar_title.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
-const _ink = Color(0xFF282B25);
-const _green = Color(0xFF54744C);
+const _ink = AppColors.ink;
+const _green = AppColors.primary;
 
 class ScanConfigurationPage extends StatefulWidget {
   const ScanConfigurationPage({
     super.key,
     required this.title,
+    this.icon = Icons.auto_awesome_outlined,
     required this.description,
     required this.isVideo,
     required this.initialDateRange,
@@ -30,9 +36,13 @@ class ScanConfigurationPage extends StatefulWidget {
     required this.onCancelScan,
     required this.scanProgressRevision,
     required this.scanProgressBuilder,
+    this.settingsPanel,
   });
 
   final String title;
+
+  /// The tool's own icon, shown in the header.
+  final IconData icon;
   final String description;
   final bool isVideo;
   final FolderDateRange initialDateRange;
@@ -54,6 +64,10 @@ class ScanConfigurationPage extends StatefulWidget {
   final VoidCallback onCancelScan;
   final ValueListenable<int> scanProgressRevision;
   final Widget Function() scanProgressBuilder;
+
+  /// Collapsible panel with this tool's current settings, shown above the
+  /// date range so they can be checked and changed before tapping Find.
+  final Widget? settingsPanel;
 
   @override
   State<ScanConfigurationPage> createState() => _ScanConfigurationPageState();
@@ -154,53 +168,18 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
   @override
   Widget build(BuildContext context) => PopScope(
     canPop: !_scanning,
-    child: Scaffold(
+    child: AppScaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: !_scanning,
+        automaticallyImplyLeading: false,
         actions: [
-          IconButton(
-            tooltip: 'Settings',
-            onPressed: _scanning ? null : widget.onSettings,
-            icon: const Icon(Icons.tune),
-          ),
-          IconButton(
-            tooltip: 'Privacy',
-            onPressed: _scanning ? null : widget.onPrivacy,
-            icon: const Icon(Icons.shield_outlined),
+          AppHomeButton(enabled: !_scanning),
+          AppMenuButton(
+            enabled: !_scanning,
+            onSettings: widget.onSettings,
+            onPrivacy: widget.onPrivacy,
           ),
         ],
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(9),
-              child: Image.asset(
-                'assets/brand/pictoiq-icon.png',
-                width: 36,
-                height: 36,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(width: 9),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    'PictoIQ',
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-                  ),
-                  Text(
-                    widget.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        title: AppBarTitle(icon: widget.icon, title: widget.title),
       ),
       body: IgnorePointer(
         ignoring: _scanning,
@@ -215,6 +194,11 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
                 ),
               ),
             ),
+            if (widget.settingsPanel != null)
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+                sliver: SliverToBoxAdapter(child: widget.settingsPanel),
+              ),
             SliverPadding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               sliver: SliverToBoxAdapter(child: _dateSection()),
@@ -240,7 +224,7 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
                   children: [
                     DecoratedBox(
                       decoration: BoxDecoration(
-                        color: const Color(0xFFE8F3E8),
+                        color: AppColors.tint,
                         borderRadius: BorderRadius.circular(28),
                       ),
                       child: Padding(
@@ -527,7 +511,7 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
     width: double.infinity,
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
     decoration: BoxDecoration(
-      color: const Color(0xFFE8F3E8),
+      color: AppColors.tint,
       borderRadius: BorderRadius.circular(16),
     ),
     child: Column(

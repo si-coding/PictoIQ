@@ -2,7 +2,11 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
 enum _Show { all, grouped, single }
 
@@ -175,7 +179,7 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF54744C),
+                        color: AppColors.primary,
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
@@ -217,8 +221,13 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
       'Left out by the date range: ${scan.imagesOutsideDateRange}',
       'Skipped (unreadable or unsupported): ${scan.imagesSkipped}',
     ];
-    return Scaffold(
-      appBar: AppBar(title: const Text('Scanned files')),
+    return AppScaffold(
+      appBar: AppBar(
+        leading: const AppBackButton(),
+        leadingWidth: appBackButtonWidth,
+        actions: const [AppMenuButton()],
+        title: const Text('Scanned files'),
+      ),
       body: CustomScrollView(
         slivers: [
           SliverPadding(

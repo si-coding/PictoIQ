@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_bar_title.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
-const _ink = Color(0xFF282B25);
-const _green = Color(0xFF54744C);
-const _canvas = Color(0xFFF7F8F4);
+const _green = AppColors.primary;
 const _line = Color(0xFFE6E8E0);
 
 /// Review screen for identical videos. In each set the oldest video is kept
@@ -17,6 +20,8 @@ class VideoDuplicatesPage extends StatefulWidget {
     required this.rangeDescription,
     required this.deleteVideos,
     this.keep = VideoKeep.oldest,
+    this.settingsPanel,
+    this.onFind,
   });
 
   /// Which video of each set is kept until the person picks another.
@@ -24,6 +29,12 @@ class VideoDuplicatesPage extends StatefulWidget {
 
   final VideoScanResult result;
   final String rangeDescription;
+
+  /// Collapsible panel with the folder, date range and this tool's settings.
+  final Widget? settingsPanel;
+
+  /// Opens this tool's Find screen (the search icon in the top bar).
+  final VoidCallback? onFind;
 
   /// Deletes the videos and returns the ids that were deleted.
   final Future<Set<String>> Function(List<String> ids) deleteVideos;
@@ -150,24 +161,31 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
   @override
   Widget build(BuildContext context) {
     final allRemovals = [for (final group in _groups) ..._removals(group)];
-    return Scaffold(
-      backgroundColor: _canvas,
+    return AppScaffold(
       appBar: AppBar(
-        backgroundColor: _canvas,
-        foregroundColor: _ink,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Back',
-          onPressed: _deleting ? null : () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Exact duplicate videos',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        automaticallyImplyLeading: false,
+        actions: [
+          if (widget.onFind != null)
+            IconButton(
+              tooltip: 'Find in another folder or range',
+              onPressed: widget.onFind,
+              icon: const Icon(Icons.manage_search),
+            ),
+          AppHomeButton(enabled: !_deleting),
+          const AppMenuButton(),
+        ],
+        title: const AppBarTitle(
+          icon: Icons.copy_all_outlined,
+          title: 'Exact duplicate videos',
         ),
       ),
       body: Column(
         children: [
+          if (widget.settingsPanel != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: widget.settingsPanel,
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Align(
@@ -187,7 +205,7 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
                 style: const TextStyle(
                   fontSize: 13,
                   height: 1.35,
-                  color: Color(0xFF596252),
+                  color: AppColors.body,
                 ),
               ),
             ),
@@ -371,7 +389,7 @@ class _VideoDuplicatesPageState extends State<VideoDuplicatesPage> {
             ),
             Text(
               _date(item.createdAt),
-              style: const TextStyle(fontSize: 11, color: Color(0xFF77796F)),
+              style: const TextStyle(fontSize: 11, color: AppColors.hint),
             ),
           ],
         ),

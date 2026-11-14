@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
 import 'package:pictoiq_mobile/core/media/image_processing.dart' show resizeLongestEdge;
+import 'package:pictoiq_mobile/shared/photo_content.dart';
 
 /// Longest edge, in pixels, that sharpness and exposure are measured at. The
 /// same size is used for every photo, so scores are comparable.
@@ -147,6 +148,7 @@ class FaceSignals {
     this.lookingAwayMax,
     this.subjectColors,
     this.personColors,
+    this.largestFaceArea,
   });
 
   static const none = FaceSignals(
@@ -180,7 +182,20 @@ class FaceSignals {
   /// group can require the same people in the same clothes. Null when not
   /// measured.
   final List<List<double>>? personColors;
+
+  /// Area of the largest face as a share of the whole picture (0-1). Null when
+  /// not measured.
+  final double? largestFaceArea;
+
+  /// A face big enough that the photo is probably about a person. A tiny
+  /// face in the distance (a presenter far across a hall) does not count.
+  bool get hasProminentFace =>
+      count > 0 && (largestFaceArea == null || largestFaceArea! >= prominentFaceArea);
 }
+
+/// Smallest share of the picture the largest face must fill for the photo to
+/// count as a photo of a person.
+const prominentFaceArea = 0.002;
 
 /// Everything the ranking needs to know about one photo.
 class ShotFeatures {
@@ -188,6 +203,7 @@ class ShotFeatures {
     required this.signals,
     required this.megapixels,
     this.faces,
+    this.labels,
   });
 
   static const unknown = ShotFeatures(
@@ -202,6 +218,10 @@ class ShotFeatures {
 
   /// Null when face detection was turned off or failed for this photo.
   final FaceSignals? faces;
+
+  /// What the image labeller recognised; null when it did not run (the
+  /// filter is off, faces were found, or labelling failed).
+  final List<PhotoLabel>? labels;
 }
 
 /// One photo handed to [rankShots].

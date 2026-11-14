@@ -386,11 +386,28 @@ enum TimeMode {
   final String description;
 }
 
+/// Which photos the best shot and best moments results may contain.
+enum ContentFilter {
+  everything(
+    'All photos',
+    'Every photo is considered, whatever it shows.',
+  ),
+  peopleAndScenery(
+    'People and scenery only',
+    'An on-device model leaves out documents, screens, food and other objects. Photos with faces, and photos of places and nature, stay. Nothing leaves your phone.',
+  );
+
+  const ContentFilter(this.label, this.description);
+
+  final String label;
+  final String description;
+}
+
 /// What to do with pages of text, receipts and similar document images.
 enum DocumentMode {
   leaveOut(
     'Leave out',
-    'Documents are not grouped or offered for deletion at all.',
+    'Pages of text, receipts and screenshots (files named Screenshot…) are not grouped or offered for deletion at all. A photo taken of a screen or slide looks like any other photo, so it is still shown.',
   ),
   strict(
     'Compare strictly',

@@ -1,11 +1,16 @@
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart'
     show FolderScanPhoto;
+import 'package:pictoiq_mobile/shared/photo_content.dart';
 
 /// Why a photo is probably clutter. Every photo gets at most one reason, the
 /// first that applies in the order of [ClutterKind.values].
 enum ClutterKind {
   screenshot('Screenshots', 'Pictures of your screen, not of life.'),
   document('Documents & receipts', 'Pages of text, receipts, notes and forms.'),
+  screenOrObject(
+    'Screens & objects',
+    'Photos of a slide, a screen or an object, not of people or places.',
+  ),
   blank('Blank or very dark', 'Black or white frames, pocket shots.'),
   blurry('Blurry', 'Soft all over, so nothing in focus.'),
   small('Tiny images', 'Very low resolution, such as forwards and stickers.');
@@ -89,6 +94,13 @@ ClutterKind? clutterKindOf(
   final signals = features.signals;
   final hasFaces = (features.faces?.count ?? 0) > 0;
   if (photo.isDocumentLike) return ClutterKind.document;
+  final faces = features.faces;
+  if (!isPeopleOrScenery(
+    faceCount: faces == null ? null : (faces.hasProminentFace ? faces.count : 0),
+    labels: features.labels,
+  )) {
+    return ClutterKind.screenOrObject;
+  }
   if (signals.isBlank ||
       (signals.meanLuma < thresholds.darkMeanLuma &&
           signals.shadowClip > thresholds.darkShadowShare)) {

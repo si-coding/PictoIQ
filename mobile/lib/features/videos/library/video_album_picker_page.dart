@@ -2,8 +2,12 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/features/videos/library/video_album_contents_page.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
 /// What the person chose on [VideoAlbumPickerPage] besides an album.
 enum VideoPickerChoice {
@@ -147,11 +151,14 @@ class _VideoAlbumPickerPageState extends State<VideoAlbumPickerPage> {
       Navigator.of(context).pop(VideoPickerChoice.otherFolder);
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
+      automaticallyImplyLeading: false,
       title: const Text('Choose a video album'),
       actions: [
         TextButton(onPressed: _otherFolder, child: const Text('Other folder…')),
+        const AppHomeButton(),
+        const AppMenuButton(),
       ],
     ),
     body: switch (_status) {
@@ -227,7 +234,7 @@ class _VideoAlbumPickerPageState extends State<VideoAlbumPickerPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 40, color: const Color(0xFF54744C)),
+          Icon(icon, size: 40, color: AppColors.primary),
           const SizedBox(height: 12),
           Text(text, textAlign: TextAlign.center),
           const SizedBox(height: 12),
@@ -268,7 +275,7 @@ class _VideoAlbumPickerPageState extends State<VideoAlbumPickerPage> {
                     ? 'PictoIQ can only see the videos you chose to share. Allow access to all photos and videos in Android settings to see the rest.'
                     : 'Missing videos? Allow access to all photos and videos in Android settings, or choose a folder.',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+                style: const TextStyle(fontSize: 12, color: AppColors.hint),
               ),
               TextButton(
                 onPressed: widget.openSettings,

@@ -35,7 +35,7 @@ void main() {
           loadPhotoGallery: (_) async => <Uint8List?>[null],
           loadVideoGallery: (_) async => const <VideoPreview>[],
           scanEnabled: true,
-          scanLabel: 'Scan Best Moments',
+          scanLabel: 'Find Best Moments',
           onSettings: () => settingsOpened = true,
           onPrivacy: () => privacyOpened = true,
           onScan: () async => false,
@@ -48,22 +48,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('1. Choose a date range'), findsOneWidget);
-    expect(find.text('PictoIQ'), findsOneWidget);
     expect(find.text('Best Moments'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    expect(find.byTooltip('Privacy'), findsOneWidget);
+    expect(find.byTooltip('Menu'), findsOneWidget);
     expect(find.text('2. Browse your album or folder'), findsOneWidget);
     expect(find.text('3. Album preview · 1 recent item'), findsOneWidget);
-    expect(find.text('Scan Best Moments'), findsOneWidget);
+    expect(find.text('Find Best Moments'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('1. Choose a date range')).dy,
       lessThan(
         tester.getTopLeft(find.text('3. Album preview · 1 recent item')).dy,
       ),
     );
-    await tester.tap(find.byTooltip('Settings'));
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
     expect(settingsOpened, isTrue);
-    await tester.tap(find.byTooltip('Privacy'));
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Privacy'));
+    await tester.pumpAndSettle();
     expect(privacyOpened, isTrue);
   });
 
@@ -92,7 +96,7 @@ void main() {
           loadPhotoGallery: (_) async => <Uint8List?>[null],
           loadVideoGallery: (_) async => const <VideoPreview>[],
           scanEnabled: true,
-          scanLabel: 'Scan Exact Duplicates',
+          scanLabel: 'Find Exact Duplicates',
           onSettings: () {},
           onPrivacy: () {},
           onScan: () async => false,
@@ -104,7 +108,7 @@ void main() {
     );
 
     final button = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Scan Exact Duplicates'),
+      find.widgetWithText(FilledButton, 'Find Exact Duplicates'),
     );
     expect(button.onPressed, isNull);
 
@@ -112,7 +116,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('3. Album preview · 1 recent item'), findsOneWidget);
     final selectedButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Scan Exact Duplicates'),
+      find.widgetWithText(FilledButton, 'Find Exact Duplicates'),
     );
     expect(selectedButton.onPressed, isNotNull);
   });
@@ -144,7 +148,7 @@ void main() {
           loadPhotoGallery: (_) async => <Uint8List?>[null],
           loadVideoGallery: (_) async => const <VideoPreview>[],
           scanEnabled: true,
-          scanLabel: 'Scan Best Moments',
+          scanLabel: 'Find Best Moments',
           onSettings: () {},
           onPrivacy: () {},
           onScan: () => scanCompletion.future,
@@ -156,7 +160,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Scan Best Moments'));
+    await tester.tap(find.text('Find Best Moments'));
     await tester.pump();
 
     expect(find.text('1. Choose a date range'), findsOneWidget);
@@ -164,12 +168,12 @@ void main() {
     expect(find.text('3. Album preview · 1 recent item'), findsOneWidget);
     expect(find.text('Analyzing photos…'), findsOneWidget);
     expect(find.text('Cancel scan'), findsOneWidget);
-    expect(find.text('Scan Best Moments'), findsNothing);
+    expect(find.text('Find Best Moments'), findsNothing);
 
     await tester.tap(find.text('Cancel scan'));
     expect(cancelRequested, isTrue);
     scanCompletion.complete(false);
     await tester.pumpAndSettle();
-    expect(find.text('Scan Best Moments'), findsOneWidget);
+    expect(find.text('Find Best Moments'), findsOneWidget);
   });
 }

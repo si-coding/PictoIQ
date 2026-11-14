@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/features/videos/library/video_player_page.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
 /// The videos of one album as a scrollable grid, so a person can look before
 /// choosing it. Tap a video to play it; "Select this album" pops with the
@@ -102,8 +106,10 @@ class _VideoAlbumContentsPageState extends State<VideoAlbumContentsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
+      automaticallyImplyLeading: false,
+      actions: const [AppHomeButton(), AppMenuButton()],
       title: Text(widget.album.name),
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(22),
@@ -111,7 +117,7 @@ class _VideoAlbumContentsPageState extends State<VideoAlbumContentsPage> {
           padding: const EdgeInsets.only(bottom: 6),
           child: Text(
             '${widget.album.count} video${widget.album.count == 1 ? '' : 's'} · tap a video to play it',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+            style: const TextStyle(fontSize: 12, color: AppColors.body),
           ),
         ),
       ),
@@ -181,7 +187,7 @@ class _VideoAlbumContentsPageState extends State<VideoAlbumContentsPage> {
           label: Text('Select this album (${widget.album.count})'),
           style: FilledButton.styleFrom(
             minimumSize: const Size.fromHeight(46),
-            backgroundColor: const Color(0xFF54744C),
+            backgroundColor: AppColors.primary,
           ),
         ),
       ),

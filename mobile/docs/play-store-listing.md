@@ -12,9 +12,10 @@ Collect memories, not clutter. Find your best photos and share them.
 **Full description (max 4000):**
 Collect memories, not clutter. PictoIQ looks through an album you choose, finds your best photos and moments, and helps you share them with family and friends or clear out copies.
 
-- Best moments: groups photos into events and moments, then shows the best 1 to 3 of each, picked for quality and variety (not three near-identical shots). Select one and share it to WhatsApp, Instagram or Facebook. Nothing is deleted. Choose how long a moment lasts, how many photos to show, and whether smiles or candid shots count more.
+- Best moments: groups photos into events and moments, then shows the best 1 to 3 of each, picked for quality and variety (not three near-identical shots). Select photos, preview them, remove any you do not want to send, and share to WhatsApp, Instagram or Facebook. Nothing is deleted. Choose how long a moment lasts, how many photos to show, and whether smiles or candid shots count more.
 - Photo reels: turn your selected best photos into a short vertical video reel with a title and your own music, built on your phone and ready to share.
-- Best shot suggestions: compares sharpness, exposure, resolution and faces (eyes open, smiles) and explains the pick.
+- Choose which photos to include: all photos, or people and scenery only (an on-device model leaves out documents, screens, food and objects).
+- Best shot suggestions: compares sharpness, exposure, resolution and faces (eyes open, smiles) and explains the pick. Keep a single best shot, or switch in Settings to keep several photos from each group.
 - Group by what is in the picture: same scene, same people, similar pose. Not by when a file was copied.
 - You stay in control: tap any photo to enlarge it, pick the one to keep, skip any group, or review one by one.
 - Exact duplicates: finds identical copies and keeps the oldest. Works for photos and for videos.
@@ -31,7 +32,7 @@ In Best shot, Exact duplicates and Clutter, photos and videos are deleted only a
 ## Data safety form (draft: verify before submitting)
 
 - Does the app collect or share required user data types? **Yes** (because of ML Kit diagnostics). Photos and videos: **not collected** (processed on device only, never leave the device).
-- Data collected, as disclosed by Google ML Kit (bundled face detection):
+- Data collected, as disclosed by Google ML Kit (bundled face detection and image labelling):
   - **App info and performance: Diagnostics** (performance metrics, API configuration, error codes). Purpose: App functionality / Analytics. Not shared with third parties (Google says ML Kit does not pass this data on).
   - **App info and performance: Other app performance data** and **Device or other IDs** (per-installation identifier). Purpose: Analytics.
 - Is all of the data encrypted in transit? **Yes** (HTTPS).

@@ -3,11 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_bar_title.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
-const _green = Color(0xFF54744C);
+const _green = AppColors.primary;
 
 class ReelConfiguration {
   const ReelConfiguration({
@@ -250,8 +255,16 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
     final title = _titleController.text.trim();
     return PopScope(
       canPop: !_creating,
-      child: Scaffold(
-        appBar: AppBar(title: const Text('Create your reel')),
+      child: AppScaffold(
+        appBar: AppBar(
+          leading: AppBackButton(enabled: !_creating),
+          leadingWidth: appBackButtonWidth,
+          actions: const [AppMenuButton()],
+          title: const AppBarTitle(
+            icon: Icons.movie_creation_outlined,
+            title: 'Create your reel',
+          ),
+        ),
         body: AbsorbPointer(
           absorbing: _creating,
           child: Scrollbar(
@@ -265,10 +278,11 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
                 sliver: SliverToBoxAdapter(
                   child: Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEAF0E6),
-                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.white,
+                      border: Border.all(color: AppColors.tintBorder),
+                      borderRadius: BorderRadius.circular(18),
                     ),
                     child: const Row(
                       children: [
@@ -278,7 +292,7 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                           child: Text(
                             'Press and hold a photo, then drag it onto another photo to change the order.',
                             style: TextStyle(
-                              color: Color(0xFF43523E),
+                              color: AppColors.body,
                               fontSize: 13,
                             ),
                           ),
@@ -296,8 +310,9 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                     '${widget.secondsPerPhoto} seconds each · '
                     '${widget.transitionMillis == 0 ? 'No transition' : '${widget.transitionMillis} ms crossfade'}',
                     style: const TextStyle(
-                      color: Color(0xFF687064),
+                      color: AppColors.body,
                       fontSize: 13,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -305,7 +320,14 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
                 sliver: SliverToBoxAdapter(
-                  child: Column(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: AppColors.tintBorder),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       TextField(
@@ -373,22 +395,33 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                         ),
                     ],
                   ),
+                  ),
                 ),
               ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 2, 20, 8),
                 sliver: SliverToBoxAdapter(
-                  child: Text(
+                  child: const Text(
                     'Photo preview · drag to reorder',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.ink,
                     ),
                   ),
                 ),
               ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                sliver: SliverGrid(
+                sliver: DecoratedSliver(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: AppColors.tintBorder),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  sliver: SliverPadding(
+                    padding: const EdgeInsets.all(10),
+                    sliver: SliverGrid(
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
                     crossAxisSpacing: 10,
@@ -434,6 +467,8 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                     childCount: _photos.length,
                   ),
                 ),
+                  ),
+                ),
               ),
               ],
             ),
@@ -458,8 +493,8 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                             LinearProgressIndicator(
                               value: _progress == 0 ? null : _progress,
                               minHeight: 52,
-                              color: const Color(0xFFB9D4B3),
-                              backgroundColor: const Color(0xFFE3EEDF),
+                              color: AppColors.tintBorder,
+                              backgroundColor: AppColors.tintStrong,
                             ),
                             Center(
                               child: Padding(

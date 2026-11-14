@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart'
@@ -28,6 +29,7 @@ import 'package:saf/saf.dart';
 
 import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/core/media/image_processing.dart';
+import 'package:pictoiq_mobile/shared/photo_content.dart';
 import 'package:pictoiq_mobile/shared/shot_ranking.dart';
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
@@ -73,6 +75,18 @@ class _ShotAnalysis {
   final bool isDocument;
   final List<double>? documentDetail;
 }
+
+/// True for files a phone saved as a screenshot or screen recording frame,
+/// recognised by their name or folder (for example `Screenshot_2026-11-12.jpg`
+/// or `Pictures/Screenshots/`). These are treated like documents: left out of
+/// best shot results when that setting is on.
+bool looksLikeScreenshotFile(String name, String relativePath) =>
+    _screenshotName.hasMatch(name) || _screenshotName.hasMatch(relativePath);
+
+final RegExp _screenshotName = RegExp(
+  r'screen[ _-]?shot|screen[ _-]?cap|screen[ _-]?record',
+  caseSensitive: false,
+);
 
 class FolderScanPhoto {
   const FolderScanPhoto({
@@ -139,7 +153,7 @@ class FolderScanPhoto {
 
   /// True for a document-like image with no faces in it.
   bool get isDocumentLike =>
-      isDocument && (features?.faces?.count ?? 0) == 0;
+      isDocument && !(features?.faces?.hasProminentFace ?? false);
 
   FolderScanPhoto withPreviewBytes(Uint8List? bytes) => FolderScanPhoto(
     uri: uri,
@@ -854,6 +868,7 @@ class FolderDuplicateScanner {
     bool groupSessions = false,
     SimilarityThresholds? thresholds,
     DocumentMode documentMode = DocumentMode.leaveOut,
+    ContentFilter contentFilter = ContentFilter.everything,
     FolderDateRange dateRange = FolderDateRange.currentFolder,
     DateTime? rangeFrom,
     DateTime? rangeTo,
@@ -972,7 +987,7 @@ class FolderDuplicateScanner {
             bytes,
             file.lastModified,
             file.name,
-            useFaceSignals,
+            useFaceSignals || contentFilter != ContentFilter.everything,
           );
         } else if (file.uri.startsWith(mediaPrefix)) {
           final bytes = await _readAll(file.uri);
@@ -998,16 +1013,30 @@ class FolderDuplicateScanner {
         ShotFeatures? features;
         if (analysis != null) {
           final faceBitmap = analysis.faceBitmap;
+          final faces = !useFaceSignals || faceBitmap == null
+              ? null
+              : await _detectFaces(
+                  faceBitmap,
+                  analysis.faceWidth,
+                  analysis.faceHeight,
+                );
+          // Photos with faces are people photos already, so only the rest
+          // need the (slower) labeller.
+          final labels =
+              contentFilter == ContentFilter.everything ||
+                  faceBitmap == null ||
+                  (faces?.hasProminentFace ?? false)
+              ? null
+              : await _labelContent(
+                  faceBitmap,
+                  analysis.faceWidth,
+                  analysis.faceHeight,
+                );
           features = ShotFeatures(
             signals: analysis.signals,
             megapixels: analysis.megapixels,
-            faces: faceBitmap == null
-                ? null
-                : await _detectFaces(
-                    faceBitmap,
-                    analysis.faceWidth,
-                    analysis.faceHeight,
-                  ),
+            faces: faces,
+            labels: labels,
           );
         }
         // Scores are relative to the rest of a group, so they are filled in
@@ -1028,7 +1057,9 @@ class FolderDuplicateScanner {
           features: features,
           colorHistogram: analysis?.colorHistogram,
           colorLayout: analysis?.colorLayout,
-          isDocument: analysis?.isDocument ?? false,
+          isDocument:
+              (analysis?.isDocument ?? false) ||
+              looksLikeScreenshotFile(file.name, entry.relativePath),
           documentDetail: analysis?.documentDetail,
           latitude: analysis?.location?.$1,
           longitude: analysis?.location?.$2,
@@ -1076,6 +1107,7 @@ class FolderDuplicateScanner {
             images,
             thresholds ?? this.thresholds,
             documentMode,
+            contentFilter,
           ),
         );
       }
@@ -1138,9 +1170,11 @@ class FolderDuplicateScanner {
       imagesOutsideDateRange: imagesOutsideDateRange,
       scannedPhotos: List.unmodifiable(images),
       skippedNames: List.unmodifiable(skippedNames),
-      documentsLeftOut: bestShotsScan && documentMode == DocumentMode.leaveOut
-          ? images.where((photo) => photo.isDocumentLike).length
-          : 0,
+      documentsLeftOut: !bestShotsScan
+          ? 0
+          : images
+                .where((photo) => _leftOut(photo, documentMode, contentFilter))
+                .length,
     );
   }
 
@@ -1280,7 +1314,58 @@ class FolderDuplicateScanner {
     }
   }
 
-  Future<void> dispose() => _faceDetector.close();
+  Future<void> dispose() async {
+    await _faceDetector.close();
+    await _labeler?.close();
+  }
+
+
+  ImageLabeler? _labeler;
+
+  /// True when a photo must not appear in best shot results: a document (when
+  /// documents are left out) or, with the content filter on, anything that is
+  /// not people or scenery.
+  static bool _leftOut(
+    FolderScanPhoto photo,
+    DocumentMode documentMode,
+    ContentFilter contentFilter,
+  ) {
+    if (documentMode == DocumentMode.leaveOut && photo.isDocumentLike) {
+      return true;
+    }
+    if (contentFilter == ContentFilter.everything) return false;
+    final faces = photo.features?.faces;
+    return photo.isDocumentLike ||
+        !isPeopleOrScenery(
+          faceCount: faces == null
+              ? null
+              : (faces.hasProminentFace ? faces.count : 0),
+          labels: photo.features?.labels,
+        );
+  }
+
+  /// Names what is in the photo, using the on-device ML Kit labeller. Returns
+  /// null when it fails, so the photo is kept rather than hidden.
+  Future<List<PhotoLabel>?> _labelContent(
+    Uint8List rgba,
+    int width,
+    int height,
+  ) async {
+    try {
+      final labeler = _labeler ??= ImageLabeler(
+        options: ImageLabelerOptions(confidenceThreshold: 0.4),
+      );
+      final labels = await labeler.processImage(
+        InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
+      );
+      return [
+        for (final label in labels) PhotoLabel(label.label, label.confidence),
+      ];
+    } catch (error) {
+      debugPrint('Photo labels unavailable: ${error.runtimeType} $error');
+      return null;
+    }
+  }
 
   /// Runs face detection on one analysis image. Returns null when detection
   /// fails, so the ranking treats that photo's faces as unknown rather than
@@ -1301,11 +1386,13 @@ class FolderDuplicateScanner {
       var smileTotal = 0.0;
       var smileCount = 0;
       var edgeCutoff = false;
+      var largestFace = 0.0;
       double? lookingAwayMax;
       final size = (width, height);
       for (final face in faces) {
         // A face this close to the border is probably cut off.
         final box = face.boundingBox;
+        largestFace = math.max(largestFace, box.width * box.height);
         final marginX = size.$1 * 0.01;
         final marginY = size.$2 * 0.01;
         if (box.left < marginX ||
@@ -1371,6 +1458,7 @@ class FolderDuplicateScanner {
         smileAverage: smileCount == 0 ? null : smileTotal / smileCount,
         edgeCutoff: edgeCutoff,
         lookingAwayMax: lookingAwayMax,
+        largestFaceArea: largestFace / (width * height),
       );
     } on PlatformException catch (error) {
       // Keep the detail: the type alone cannot tell a missing model from a
@@ -1428,10 +1516,11 @@ class FolderDuplicateScanner {
     List<FolderScanPhoto> allImages,
     SimilarityThresholds thresholds,
     DocumentMode documentMode,
+    ContentFilter contentFilter,
   ) {
     final images = [
       for (final photo in allImages)
-        if (documentMode == DocumentMode.strict || !photo.isDocumentLike) photo,
+        if (!_leftOut(photo, documentMode, contentFilter)) photo,
     ];
     final clusters = clusterSimilar(
       [

@@ -12,6 +12,8 @@ lib/
 │   │   ├── duplicates/       folder_duplicate_scanner.dart
 │   │   └── library/          album pickers, scanned files, photo viewer
 │   ├── settings/             app_settings.dart, settings_page.dart
+│   ├── photos/share/         share_preview_page.dart (review photos before sharing)
+│   ├── splash/               splash_page.dart (animated PictoIQ wordmark after the native launch screen)
 │   └── videos/               Planned; interfaces and folders only
 │       ├── library/  duplicates/  similarity/  moments/
 │       ├── enhancement/  player/  export/
@@ -29,6 +31,14 @@ lib/
     ├── ml/                   model_manager, inference_service, model_registry
     └── database/             database_service (was library_store), migrations/
 ```
+
+`shared/app_background.dart` (`AppBackground`, `AppScaffold`) gives every screen the same light page background (the fresh green is only the header/app bar), and the scan results screen uses `AppBackground` too; `shared/app_bar_title.dart` (`AppBarTitle`) puts each screen's own icon in the header (the logo only appears on the home screen); new screens should use `AppScaffold`, not `Scaffold`. `shared/app_back_button.dart` is the white round back button used by every app bar; app bar colours come from `AppBarTheme` in `main.dart` (set from `AppColors`).
+
+The scan-finished popup is queued by `_showResultPopup` and opened by `_flushPopup` once the scan configuration screen has closed itself (opening it earlier would be closed by that pop). Result cards are named "Group N · count · time" (best shot) or "Moment N · kind · time" (best moments) by `_groupName`.
+
+The results screen is a stack of white cards: a summary card (headline, numbers, Clean up all / Review all), the share card, a scope strip (folder, date range, photos scanned, scan menu) right above the group cards. The documents setting leaves out pages of text and files named like screenshots (`looksLikeScreenshotFile`); photos of a screen or slide cannot be told from other photos without an object-recognition model.
+
+The "which photos to include" setting (`ContentFilter`) runs ML Kit image labelling (`_labelContent` in the folder scanner) only on photos with no faces, and `isPeopleOrScenery` in `shared/photo_content.dart` decides what is left out. Unknown or failed labelling keeps the photo. A face only counts when it fills at least 0.2% of the picture (`prominentFaceArea`), so a distant presenter does not turn a photo of a slide into a people photo, and the labeller's people/scenery labels must be about as sure as its screen/object labels. Clutter has a "Screens & objects" kind (`ClutterKind.screenOrObject`) that uses the same labels. Every screen except Home has the three-dot `AppMenuButton` (Settings, Privacy); Home registers its actions in `AppMenuActions`.
 
 Rules: `core/` and `shared/` never import `features/`. Imports use `package:pictoiq_mobile/...`.
 
@@ -60,6 +70,14 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact Dupl
 ## Clutter (photos)
 
 `features/photos/clutter/` holds `clutter_classifier.dart` (pure Dart, tested in `test/clutter_classifier_test.dart`) and `clutter_page.dart`. The Clutter tile runs `FolderDuplicateScanner.scanUri(bestShotsScan: true, groupShots: false)`, which analyses every photo but skips grouping, then `findClutter` assigns each photo at most one `ClutterKind` and the page shows them for review. Deletion goes through `FolderDuplicateScanner.deleteFiles`, so Android confirms once for the whole batch.
+
+## Settings next to the results
+
+`features/settings/category_settings.dart` holds the controls for each tool (`SettingsCategory`, `settingsChildrenFor`) so the same widgets are used by the Settings page, by a tool's Find screen (`ScanConfigurationPage.settingsPanel`, collapsible, above the date range) and above results (`CollapsiblePanel` in the scope strip of the similar-photo results, and in `ClutterPage` / `VideoDuplicatesPage` via `settingsPanel`). Every change goes through `_updateSettings`, so it is saved at once and used by the next Find. Result screens also have a search icon (`onFind`) that opens the tool's Find screen. Scan buttons are labelled "Find …". Tested in `test/category_settings_test.dart`.
+
+Browse and results screens have no back arrow: `AppHomeButton` (shared/app_back_button.dart) sits left of the ⋮ menu and returns to the home screen (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
+
+After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard`: a two-line header (folder · short range, counts), the filters as chips, and a "Filters" control that opens the scan's facts and the editable filters; after a filter differs from the one used for the scan it offers "Find again with these filters" (opens the Find screen). The Find screens' filter panel is titled "Update … Filter" with its chevron at the right. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
 
 ## Feature flags
 

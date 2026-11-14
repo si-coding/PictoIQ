@@ -2,8 +2,12 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:pictoiq_mobile/shared/app_menu_button.dart';
+import 'package:pictoiq_mobile/shared/app_background.dart';
+import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/library/album_contents_page.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
+import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
 /// What the person chose on [AlbumPickerPage] besides an album.
 enum AlbumPickerChoice {
@@ -122,11 +126,14 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
   void _otherFolder() => Navigator.of(context).pop(AlbumPickerChoice.otherFolder);
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
+      automaticallyImplyLeading: false,
       title: const Text('Choose an album'),
       actions: [
         TextButton(onPressed: _otherFolder, child: const Text('Other folder…')),
+        const AppHomeButton(),
+        const AppMenuButton(),
       ],
     ),
     body: switch (_status) {
@@ -183,7 +190,7 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 40, color: const Color(0xFF54744C)),
+          Icon(icon, size: 40, color: AppColors.primary),
           const SizedBox(height: 12),
           Text(text, textAlign: TextAlign.center),
           const SizedBox(height: 12),
@@ -223,7 +230,7 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
               const Text(
                 'Missing photos? Allow access to all photos in Android settings.',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12, color: Color(0xFF77796F)),
+                style: TextStyle(fontSize: 12, color: AppColors.hint),
               ),
               TextButton(
                 onPressed: widget.openSettings,

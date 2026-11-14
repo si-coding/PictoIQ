@@ -10,14 +10,25 @@ import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart'
     show ClutterBlur, ClutterKind;
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart'
     show VideoKeep;
-import 'package:pictoiq_mobile/shared/similarity_grouping.dart' show DocumentMode, MatchLevel, TimeMode;
+import 'package:pictoiq_mobile/shared/similarity_grouping.dart' show ContentFilter, DocumentMode, MatchLevel, TimeMode;
 
 enum ReelTitleStyle { clean, bold, elegant }
+
+/// Best shot: how many photos of a similar group can be kept.
+enum BestShotSelection {
+  /// Exactly one photo is kept; choosing another replaces the choice.
+  single,
+
+  /// The user can keep several photos of a group (tap each one to add or
+  /// remove it).
+  multiple,
+}
 
 /// Preferences that outlive one run of the app.
 class AppSettings {
   const AppSettings({
     this.manualSelectionOnly = false,
+    this.bestShotSelection = BestShotSelection.single,
     this.useFaceSignals = true,
     this.groupSessions = false,
     this.matchLevel = MatchLevel.balanced,
@@ -25,6 +36,7 @@ class AppSettings {
     this.showEvents = true,
     this.timeMode = TimeMode.hint,
     this.documentMode = DocumentMode.leaveOut,
+    this.contentFilter = ContentFilter.everything,
     this.momentWindow = MomentWindow.activity,
     this.momentCount = 2,
     this.momentVariety = MomentVariety.balanced,
@@ -45,6 +57,10 @@ class AppSettings {
   /// When true, PictoIQ never picks a similar photo to keep: the user marks
   /// the ones to keep, and nothing is selected for deletion until they do.
   final bool manualSelectionOnly;
+
+  /// Best shot: keep a single photo per group (the default) or let the user
+  /// keep several.
+  final BestShotSelection bestShotSelection;
 
   /// Whether face and eye detection feed the best-shot ranking. Turning it off
   /// makes scans faster and ranks on sharpness, lighting and resolution only.
@@ -71,6 +87,9 @@ class AppSettings {
 
   /// What to do with pages of text and similar document images.
   final DocumentMode documentMode;
+
+  /// Whether results may contain only people and scenery photos.
+  final ContentFilter contentFilter;
 
   /// Best moments: how far apart in time the photos of one moment may be.
   final MomentWindow momentWindow;
@@ -120,6 +139,7 @@ class AppSettings {
 
   AppSettings copyWith({
     bool? manualSelectionOnly,
+    BestShotSelection? bestShotSelection,
     bool? useFaceSignals,
     bool? groupSessions,
     MatchLevel? matchLevel,
@@ -127,6 +147,7 @@ class AppSettings {
     bool? showEvents,
     TimeMode? timeMode,
     DocumentMode? documentMode,
+    ContentFilter? contentFilter,
     MomentWindow? momentWindow,
     int? momentCount,
     MomentVariety? momentVariety,
@@ -144,6 +165,7 @@ class AppSettings {
     ReelTitleStyle? reelTitleStyle,
   }) => AppSettings(
     manualSelectionOnly: manualSelectionOnly ?? this.manualSelectionOnly,
+    bestShotSelection: bestShotSelection ?? this.bestShotSelection,
     useFaceSignals: useFaceSignals ?? this.useFaceSignals,
     groupSessions: groupSessions ?? this.groupSessions,
     matchLevel: matchLevel ?? this.matchLevel,
@@ -151,6 +173,7 @@ class AppSettings {
     showEvents: showEvents ?? this.showEvents,
     timeMode: timeMode ?? this.timeMode,
     documentMode: documentMode ?? this.documentMode,
+    contentFilter: contentFilter ?? this.contentFilter,
     momentWindow: momentWindow ?? this.momentWindow,
     momentCount: momentCount ?? this.momentCount,
     momentVariety: momentVariety ?? this.momentVariety,
@@ -170,6 +193,7 @@ class AppSettings {
 
   Map<String, Object?> toJson() => {
     'manualSelectionOnly': manualSelectionOnly,
+    'bestShotSelection': bestShotSelection.name,
     'useFaceSignals': useFaceSignals,
     'groupSessions': groupSessions,
     'matchLevel': matchLevel.name,
@@ -177,6 +201,7 @@ class AppSettings {
     'showEvents': showEvents,
     'timeMode': timeMode.name,
     'documentMode': documentMode.name,
+    'contentFilter': contentFilter.name,
     'momentWindow': momentWindow.name,
     'momentCount': momentCount,
     'momentVariety': momentVariety.name,
@@ -198,6 +223,7 @@ class AppSettings {
   factory AppSettings.fromJson(Map<String, Object?> json) {
     const defaults = AppSettings();
     final manual = json['manualSelectionOnly'];
+    final selection = json['bestShotSelection'];
     final faces = json['useFaceSignals'];
     final sessions = json['groupSessions'];
     final level = json['matchLevel'];
@@ -205,6 +231,7 @@ class AppSettings {
     final events = json['showEvents'];
     final time = json['timeMode'];
     final documents = json['documentMode'];
+    final content = json['contentFilter'];
     final window = json['momentWindow'];
     final count = json['momentCount'];
     final variety = json['momentVariety'];
@@ -224,6 +251,10 @@ class AppSettings {
       manualSelectionOnly: manual is bool
           ? manual
           : defaults.manualSelectionOnly,
+      bestShotSelection: BestShotSelection.values.firstWhere(
+        (value) => value.name == selection,
+        orElse: () => defaults.bestShotSelection,
+      ),
       useFaceSignals: faces is bool ? faces : defaults.useFaceSignals,
       groupSessions: sessions is bool ? sessions : defaults.groupSessions,
       matchLevel: MatchLevel.values.firstWhere(
@@ -235,6 +266,10 @@ class AppSettings {
       timeMode: TimeMode.values.firstWhere(
         (value) => value.name == time,
         orElse: () => defaults.timeMode,
+      ),
+      contentFilter: ContentFilter.values.firstWhere(
+        (value) => value.name == content,
+        orElse: () => defaults.contentFilter,
       ),
       documentMode: DocumentMode.values.firstWhere(
         (value) => value.name == documents,
@@ -306,6 +341,7 @@ class AppSettings {
   bool operator ==(Object other) =>
       other is AppSettings &&
       other.manualSelectionOnly == manualSelectionOnly &&
+      other.bestShotSelection == bestShotSelection &&
       other.useFaceSignals == useFaceSignals &&
       other.groupSessions == groupSessions &&
       other.matchLevel == matchLevel &&
@@ -313,6 +349,7 @@ class AppSettings {
       other.showEvents == showEvents &&
       other.timeMode == timeMode &&
       other.documentMode == documentMode &&
+      other.contentFilter == contentFilter &&
       other.momentWindow == momentWindow &&
       other.momentCount == momentCount &&
       other.momentVariety == momentVariety &&
@@ -333,6 +370,7 @@ class AppSettings {
   @override
   int get hashCode => Object.hashAll([
     manualSelectionOnly,
+    bestShotSelection,
     useFaceSignals,
     groupSessions,
     matchLevel,
@@ -340,6 +378,7 @@ class AppSettings {
     showEvents,
     timeMode,
     documentMode,
+    contentFilter,
     momentWindow,
     momentCount,
     momentVariety,

@@ -25,6 +25,7 @@ void main() {
   test('defaults let PictoIQ suggest photos and use faces', () {
     const settings = AppSettings();
     expect(settings.manualSelectionOnly, isFalse);
+    expect(settings.bestShotSelection, BestShotSelection.single);
     expect(settings.useFaceSignals, isTrue);
     expect(settings.groupSessions, isFalse);
     expect(settings.matchLevel, MatchLevel.balanced);
@@ -111,6 +112,35 @@ void main() {
       const AppSettings(clutterOff: {ClutterKind.blank}) ==
           const AppSettings(clutterOff: {ClutterKind.small}),
       isFalse,
+    );
+  });
+
+  test('best shot selection mode survives a save and ignores bad values', () async {
+    const saved = AppSettings(bestShotSelection: BestShotSelection.multiple);
+    await store.save(saved);
+    expect((await store.load()).bestShotSelection, BestShotSelection.multiple);
+    expect(
+      AppSettings.fromJson({'bestShotSelection': 'many'}).bestShotSelection,
+      BestShotSelection.single,
+    );
+    expect(
+      const AppSettings(bestShotSelection: BestShotSelection.multiple) ==
+          const AppSettings(),
+      isFalse,
+    );
+  });
+
+  test('content filter survives a save and ignores bad values', () async {
+    await store.save(
+      const AppSettings(contentFilter: ContentFilter.peopleAndScenery),
+    );
+    expect(
+      (await store.load()).contentFilter,
+      ContentFilter.peopleAndScenery,
+    );
+    expect(
+      AppSettings.fromJson({'contentFilter': 'x'}).contentFilter,
+      ContentFilter.everything,
     );
   });
 

@@ -32,14 +32,15 @@ Check the build is really signed with your key: the build must not warn about de
 ## 3. Check what the bundle declares
 
 - **Target API level.** New apps and updates must target API 36 or higher from 31 August 2026. Look in the merged manifest (`build/app/intermediates/merged_manifests/release/`) for `targetSdkVersion`. If it is lower, upgrade Flutter (`flutter upgrade`) and rebuild.
-- **16 KB page size.** Upload the bundle to an internal test track and read Play Console's warnings, or check the `.so` files in Android Studio (Build > Analyze APK). The ML Kit face-detection plugin has native libraries; update it if it is flagged.
+- **16 KB page size.** Upload the bundle to an internal test track and read Play Console's warnings, or check the `.so` files in Android Studio (Build > Analyze APK). The ML Kit face-detection and image-labelling plugins have native libraries; update them if flagged. Image labelling bundles its model, so the app grows by a few MB: check the size on the Play Console download-size report.
+- **Theme.** The look is one build setting, `PICTOIQ_THEME` (`fresh` default, `forest`, `classic`; see `lib/core/config/README.md`). Pick one before building the release bundle, e.g. `flutter build appbundle --release --dart-define=PICTOIQ_THEME=fresh`, and take the store screenshots from that build.
 - **Video switch.** Videos are controlled by one flag, `PICTOIQ_VIDEO` (default on, see `lib/core/config/feature_flags.dart`). To ship a photo-only build, pass `--dart-define=PICTOIQ_VIDEO=false` to `flutter build appbundle`: the Photos | Videos switch, the video tools and the Videos settings disappear, and only photo access is requested. The flag does not edit the manifest, so for a photo-only release also delete the READ_MEDIA_VIDEO line from `AndroidManifest.xml`, or Play will still ask for the video permission declaration.
 - **Permissions.** The merged manifest should contain READ_MEDIA_IMAGES, READ_MEDIA_VIDEO and READ_EXTERNAL_STORAGE (maxSdkVersion 32), and must not contain MANAGE_EXTERNAL_STORAGE. Play requires you to fill in the Photo and video permissions declaration (see `play-store-listing.md`). ML Kit adds INTERNET (it sends diagnostics to Google); the app itself works offline.
 - **Application ID.** `com.pictoiq.app` cannot change after publishing.
 
 ## 4. Test the release build on a real phone (you)
 
-`flutter install --release` (or install the bundle with `bundletool`). Scan a real folder, delete a test photo, open the settings, cancel a scan. Release builds can behave differently from debug builds (code shrinking, plugins).
+`flutter install --release` (or install the bundle with `bundletool`). Scan a real folder, delete a test photo, open the settings, cancel a scan, open the collapsible settings panel on a Find screen and on the results and change a setting, tap the Find icon on a results screen, share photos from the preview screen, and check the opening sequence (Android's launch screen with the logo, then the animated "picto" + "iq" under it) and the pop-up shown after a scan. Release builds can behave differently from debug builds (code shrinking, plugins).
 
 ## 5. Play Console setup (you)
 
@@ -66,3 +67,6 @@ Organisation accounts (with a D-U-N-S number) skip the 12-tester rule.
 
 - The listing says photos stay on the device. Do not add analytics, ads or uploads without updating the privacy policy and the Data safety form first.
 - If you re-enable the Library tab (copies photos into the app's private storage) or add anything that stores or sends data, update the policy and the form.
+
+- **Content filter.** In Settings choose "People and scenery only", scan a folder that has screenshots, documents, food and slides, and confirm they are left out and the "N images were left out" note appears. Also run Clutter and check slides, screens and objects are listed under "Screens & objects". Check the three-dot menu (Settings, Privacy) on every screen except Home. The label lists live in `lib/shared/photo_content.dart`; tune them if real photos are wrongly kept or hidden.
+- **Launch screen.** `res/drawable-nodpi/pictoiq_splash.png` (logo only) is the pre-Android 12 launch image; `values-v31` and `values-night-v31` style the Android 12+ system splash (icon only). The animated wordmark is drawn by the app itself (`lib/features/splash/splash_page.dart`, same background colour and logo size), so it looks the same on every Android version. Reinstall after changing the native files, because Android caches launch screens.
