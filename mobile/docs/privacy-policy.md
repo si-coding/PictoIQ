@@ -1,6 +1,6 @@
 # PictoIQ Privacy Policy
 
-Last updated: [DATE]
+Last updated: 16 November 2026
 
 PictoIQ ("the app") helps you find your best photos and moments, remove exact duplicate photos, clear out clutter such as screenshots, and make short photo reels to share, on your own phone. This policy explains what the app does with your information.
 
@@ -28,7 +28,7 @@ PictoIQ ("the app") helps you find your best photos and moments, remove exact du
 
 ## Private photos
 
-You can mark a photo as private in the photo viewer. PictoIQ never shares a private photo or puts it in a reel, and warns you if one is included. The app remembers which photos you marked (by their location on your phone, not the photo itself) in a small file on your device. It is not sent anywhere. PictoIQ does not promise to detect sensitive or inappropriate photos by itself, so check what you share.
+You can mark a photo as private in the photo viewer. PictoIQ never shares a private photo or puts it in a reel, and warns you if one is included. The app remembers which photos you marked (by their location on your phone, not the photo itself) in a small file on your device. It is not sent anywhere. Before you share photos or make a reel, PictoIQ also checks them on your phone with a small model built into the app, to catch pictures that look sexual or nude. Those pictures are not shared and you are warned. The check happens entirely on your device, and the pictures are not sent anywhere. No check is perfect: it can miss some pictures and flag harmless ones, so please look at what you share.
 
 ## Scan size
 
@@ -56,4 +56,4 @@ If this policy changes, the new version will be posted here with a new date.
 
 ## Contact
 
-Questions about this policy: [CONTACT EMAIL]
+Questions about this policy: pictoiq@gmail.com

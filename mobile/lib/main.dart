@@ -28,6 +28,7 @@ import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dar
 import 'package:pictoiq_mobile/core/media/media_asset.dart';
 import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
 import 'package:pictoiq_mobile/core/device/device_storage.dart';
+import 'package:pictoiq_mobile/shared/on_device_sensitive_detector.dart';
 import 'package:pictoiq_mobile/core/storage/private_photos.dart';
 import 'package:pictoiq_mobile/features/photos/share/share_guard.dart';
 import 'package:pictoiq_mobile/features/photos/share/sensitive_warning.dart';
@@ -272,7 +273,7 @@ class _LibraryPageState extends State<LibraryPage> {
   /// applied before anything is shared or put in a reel.
   final _privatePhotos = PrivatePhotoStore();
   final SensitiveContentDetector _sensitiveDetector =
-      const NoSensitiveDetector();
+      OnDeviceSensitiveDetector();
   final _videoReelService = VideoReelService();
   final _videoScanner = VideoDuplicateScanner();
 

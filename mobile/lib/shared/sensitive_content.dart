@@ -8,8 +8,10 @@ const sensitiveThreshold = 0.6;
 ///
 /// Android's built-in labeller (ML Kit's default model) cannot do this: its
 /// label list has no nudity or underwear labels, so a detector needs its own
-/// model. Until one is bundled the app uses [NoSensitiveDetector] and relies
-/// on photos the person marked as private.
+/// model. The app uses `OnDeviceSensitiveDetector` (a bundled model) and falls
+/// back to [NoSensitiveDetector], which relies on photos the person marked as
+/// private, when the model cannot load. No model is perfect: it can miss
+/// pictures and flag harmless ones.
 abstract class SensitiveContentDetector {
   /// True when this detector can really recognise sensitive pictures.
   bool get isAvailable;

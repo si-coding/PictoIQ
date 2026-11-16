@@ -13,6 +13,7 @@ lib/
 │   │   └── library/          album pickers, scanned files, photo viewer
 │   ├── settings/             app_settings.dart, settings_page.dart
 │   ├── photos/share/         share_preview_page.dart (review photos before sharing)
+│   ├── splash/               splash_page.dart (animated PictoIQ wordmark after the native launch screen)
 │   └── videos/               Planned; interfaces and folders only
 │       ├── library/  duplicates/  similarity/  moments/
 │       ├── enhancement/  player/  export/
@@ -31,7 +32,13 @@ lib/
     └── database/             database_service (was library_store), migrations/
 ```
 
-`shared/app_back_button.dart` is the white round back button used by every app bar; app bar colours come from `AppBarTheme` in `main.dart` (set from `AppColors`).
+`shared/app_background.dart` (`AppBackground`, `AppScaffold`) gives every screen the same light page background (the fresh green is only the header/app bar), and the scan results screen uses `AppBackground` too; `shared/app_bar_title.dart` (`AppBarTitle`) puts each screen's own icon in the header (the logo only appears on the home screen); new screens should use `AppScaffold`, not `Scaffold`. `shared/app_back_button.dart` is the white round back button used by every app bar; app bar colours come from `AppBarTheme` in `main.dart` (set from `AppColors`).
+
+The scan-finished popup is queued by `_showResultPopup` and opened by `_flushPopup` once the scan configuration screen has closed itself (opening it earlier would be closed by that pop). Result cards are named "Group N · count · time" (best shot) or "Moment N · kind · time" (best moments) by `_groupName`.
+
+The results screen is a stack of white cards: a summary card (headline, numbers, Clean up all / Review all), the share card, a scope strip (folder, date range, photos scanned, scan menu) right above the group cards. The documents setting leaves out pages of text and files named like screenshots (`looksLikeScreenshotFile`); photos of a screen or slide cannot be told from other photos without an object-recognition model.
+
+The "which photos to include" setting (`ContentFilter`) runs ML Kit image labelling (`_labelContent` in the folder scanner) only on photos with no faces, and `isPeopleOrScenery` in `shared/photo_content.dart` decides what is left out. Unknown or failed labelling keeps the photo. A face only counts when it fills at least 0.2% of the picture (`prominentFaceArea`), so a distant presenter does not turn a photo of a slide into a people photo, and the labeller's people/scenery labels must be about as sure as its screen/object labels. Clutter has a "Screens & objects" kind (`ClutterKind.screenOrObject`) that uses the same labels. Every screen except Home has the three-dot `AppMenuButton` (Settings, Privacy); Home registers its actions in `AppMenuActions`.
 
 Rules: `core/` and `shared/` never import `features/`. Imports use `package:pictoiq_mobile/...`.
 
@@ -64,6 +71,14 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact Dupl
 
 `features/photos/clutter/` holds `clutter_classifier.dart` (pure Dart, tested in `test/clutter_classifier_test.dart`) and `clutter_page.dart`. The Clutter tile runs `FolderDuplicateScanner.scanUri(bestShotsScan: true, groupShots: false)`, which analyses every photo but skips grouping, then `findClutter` assigns each photo at most one `ClutterKind` and the page shows them for review. Deletion goes through `FolderDuplicateScanner.deleteFiles`, so Android confirms once for the whole batch.
 
+## Settings next to the results
+
+`features/settings/category_settings.dart` holds the controls for each tool (`SettingsCategory`, `settingsChildrenFor`) so the same widgets are used by the Settings page, by a tool's Find screen (`ScanConfigurationPage.settingsPanel`, collapsible, above the date range) and above results (`CollapsiblePanel` in the scope strip of the similar-photo results, and in `ClutterPage` / `VideoDuplicatesPage` via `settingsPanel`). Every change goes through `_updateSettings`, so it is saved at once and used by the next Find. Result screens also have a search icon (`onFind`) that opens the tool's Find screen. Scan buttons are labelled "Find …". Tested in `test/category_settings_test.dart`.
+
+Browse and results screens have no back arrow: `AppHomeButton` (shared/app_back_button.dart) sits left of the ⋮ menu and returns to the home screen (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
+
+After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard`: a two-line header (folder · short range, counts), the filters as chips, and a "Filters" control that opens the scan's facts and the editable filters; after a filter differs from the one used for the scan it offers "Find again with these filters" (opens the Find screen). The Find screens' filter panel is titled "Update … Filter" with its chevron at the right. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
+
 ## Feature flags
 
 `core/config/feature_flags.dart` (`FeatureFlags.current.videoEnabled`, from `--dart-define=PICTOIQ_VIDEO`). `main.dart` reads it to show or hide the Photos | Videos switch, `SettingsPage(showVideoSettings:)` hides the Videos section, and `FolderDuplicateScanner.requestMediaAccess` asks for photo access only when videos are off. Video code is not otherwise touched; it is simply never reached.
@@ -71,3 +86,119 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact Dupl
 ## Photo reels
 
 `features/videos/export/reel_configuration_page.dart` is the editor (title, title style, audio, drag to reorder; the whole page scrolls and the photo grid auto-scrolls while dragging). `core/video/video_reel_service.dart` talks to Android over the `com.pictoiq.app/video_reel` channels; `PhotoReelEncoder.kt` draws each frame (1080x1920, 30 fps, H.264), re-encodes the chosen audio to AAC, trims it to the reel length and muxes both into one MP4. Old reels are deleted from the cache before a new one is made.
+
+## People-first Best Moments and Best Shots
+
+Best Moments (the best shot of each event) and Best Shots (the best of several
+similar clicks) are the core of the app, so the ranking is built around the
+person in the photo and asks nothing extra of the user.
+
+- **Face focus** (`shared/shot_ranking.dart`): when two or more photos in a
+  group show a face, the sharpness of the largest face itself is compared
+  (`regionSharpness`, measured in the scanner next to face detection). A face
+  far softer than the best face is a fault ("the face is out of focus"), so a
+  crisp background can no longer carry a blurry person. Without face
+  measurements the ranking is exactly as before.
+- **Unclear people photos** (`clutter_classifier.dart`): a new clutter kind for
+  a clear, prominent face that is soft in absolute terms, or much softer than
+  a picture that is otherwise in focus. Tiny distant faces are not judged. The
+  thresholds are `ClutterThresholds.unclear*` and need tuning on real photos
+  with the "Why is this here?" panel.
+- **People only filter** (`ContentFilter.peopleOnly`, `isAboutPeople`): a clear
+  face, or a confident people label at least as strong as any object label.
+  Scenery alone does not count. Unknown (labeller failed) is kept.
+- **Favourites** (`FolderScanPhoto.isFavorite`, from the gallery's own star):
+  always kept in a group (`_decisionFor` in `main.dart`), never listed as
+  clutter. If a favourite was not the ranked pick, the group needs review and
+  is skipped by bulk cleanup.
+- **Why is this here?** (`library/photo_explain.dart`): an info button in the
+  photo viewer and the clutter preview lists what the face detector and the
+  labeller saw (faces, face sharpness, labels and confidences) and the ranking
+  notes. Computed on the phone, nothing is sent anywhere.
+
+### One set of photo filters for every tool
+
+Best Moments, Best Shots and Duplicate photos share the same two choices
+(`sharedPhotoSettings` in `features/settings/category_settings.dart`):
+
+- **Which photos to include**: People and Scenery chips that can be switched on
+  together (`ContentFilter.fromChoice`). Both on is the default
+  (`peopleAndScenery`); neither on means every photo. `peopleOnly` and
+  `sceneryOnly` use the same on-device labeller; a photo whose main person is
+  out of focus is also left out whenever people are wanted.
+- **Documents and screenshots of pages**: unchanged.
+
+Best Moments hides moments with no people unless Scenery is on
+(`ContentFilter.includesScenery`); the old "Show moments with no people" switch
+is gone (the stored `momentShowScenes` value is still honoured).
+
+### Results page layout
+
+The "N moments found" section holds the ⋮ menu (view scanned files, about this
+scan) and the scan's facts as plain text (folder and dates, photos scanned, the
+settings used). Below it, "Change Filter" is a single collapsible panel
+(`ScanScopeCard(showScanDetails: false)`). When new results appear, the page
+glides down to the first photos (`_scrollToResults`).
+
+### Home storage figure
+
+The Home header shows free space next to Photos, Videos and Albums. It comes
+from `DeviceStorage` (`core/device/device_storage.dart`), a method channel
+answered by `StatFs` in `MainActivity.kt`. No permission is needed and nothing
+leaves the phone.
+
+### Bottom bar and scrolling
+
+The bottom bar depends on the screen. On the results screen it is just Share and
+Create reel, in bold forest green (the top bar has Home), and there is no separate
+"Share your memories" card on the page. On the home screen it is Photos, Videos (when
+enabled), Settings and Privacy. While a reel is made, Cancel reel sits under
+the progress bar, as Cancel scan does under the scan progress. Settings and
+Privacy are also in the ⋮ menu. Scans analyse several photos at once
+(`defaultScanConcurrency`: 3 to 6 by CPU cores). Long result lists have a draggable scroll bar
+and a back-to-top button (`_withScrollAids` in `main.dart`).
+
+### Sensitive pictures are never shared
+
+Before anything is shared or put in a reel (`_screenForSharing` in `main.dart`),
+`screenForSharing` (`features/photos/share/share_guard.dart`) removes photos the
+person marked private (the lock button in the photo viewer, stored on the phone
+by `PrivatePhotoStore`) and photos a `SensitiveContentDetector` scores at or
+above `sensitiveThreshold`. The person is warned, can review those photos, and
+can carry on without them.
+
+Automatic detection needs its own model: ML Kit's default labeller has no
+nudity or underwear labels (its label map only has Swimwear, Skin, Trunk and
+Muscle). The app uses `OnDeviceSensitiveDetector` (see "Sensitive-picture
+check" below) at `_sensitiveDetector` in `main.dart`, and `NoSensitiveDetector`
+is the do-nothing fallback. Illegal material cannot be recognised on the phone; the warning tells the
+person not to pass it on and to report it.
+
+### Same moment, people in different places
+
+For Best Moments, photos with a trusted camera time within 3 minutes get slack
+in two places (`similarity_grouping.dart`): the clothing-colour check allows
+1.6 times the usual difference (people swap places, or a balloon covers their
+clothes), and a photo that is alike at least 3 photos of a group stays in it
+even when that is under the usual share of a big group (`minLinks` in
+`_splitLooseChain`). Both limits are untuned; check them on real photos.
+
+### Owner limits
+
+`lib/core/config/app_limits.dart` holds limits only the owner changes (edit,
+then release; they are not in Settings): `shareMaxPhotos` 9, `reelMaxPhotos` 9
+and `scanMaxPhotos` 500. A scan looks at the newest 500 photos and the results
+say how many older ones were not scanned. The share screen lists every best
+shot or moment with a warning when there are more than 9; the top 9 are sent,
+and the person can remove photos or drag them into order. The reel editor does
+the same. The old "Maximum photos in a reel" setting was removed.
+
+### Sensitive-picture check
+
+`lib/shared/on_device_sensitive_detector.dart` wraps the `flutter_nsfw_detector`
+package (MIT, a 17 MB MobileNet-style model bundled in its Android assets, run
+by LiteRT 1.4.2; no network code). `screenForSharing` scores each photo and
+blocks those at or above `sensitiveThreshold` (0.6). If the model cannot load,
+the detector reports itself unavailable and only private marks apply. The
+package comes from an unverified publisher and the model's own licence is not
+stated: both are release checks (see the Play checklist).
