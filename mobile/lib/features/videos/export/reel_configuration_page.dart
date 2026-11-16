@@ -479,66 +479,65 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6),
             child: _creating
-                ? Semantics(
-                    label: _progress == 0
-                        ? 'Preparing your reel'
-                        : 'Creating your reel, ${(_progress * 100).round()} percent',
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(26),
-                      child: SizedBox(
-                        height: 52,
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            LinearProgressIndicator(
-                              value: _progress == 0 ? null : _progress,
-                              minHeight: 52,
-                              color: AppColors.tintBorder,
-                              backgroundColor: AppColors.tintStrong,
-                            ),
-                            Center(
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  12,
-                                  0,
-                                  72,
-                                  0,
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Semantics(
+                        label: _progress == 0
+                            ? 'Preparing your reel'
+                            : 'Creating your reel, ${(_progress * 100).round()} percent',
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(26),
+                          child: SizedBox(
+                            height: 52,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                LinearProgressIndicator(
+                                  value: _progress == 0 ? null : _progress,
+                                  minHeight: 52,
+                                  color: AppColors.tintBorder,
+                                  backgroundColor: AppColors.tintStrong,
                                 ),
-                                child: Text(
-                                  _cancelling
-                                      ? 'Cancelling reel…'
-                                      : _progress == 0
-                                      ? 'Preparing your reel…'
-                                      : 'Creating your reel… ${(_progress * 100).floor()}%',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF2F3A2B),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            if (!_cancelling)
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: TextButton(
-                                  onPressed: _cancelReel,
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: const Color(0xFF2F3A2B),
-                                    minimumSize: const Size(68, 52),
+                                Center(
+                                  child: Padding(
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
+                                      horizontal: 12,
+                                    ),
+                                    child: Text(
+                                      _cancelling
+                                          ? 'Cancelling reel…'
+                                          : _progress == 0
+                                          ? 'Preparing your reel…'
+                                          : 'Creating your reel… ${(_progress * 100).floor()}%',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF2F3A2B),
+                                      ),
                                     ),
                                   ),
-                                  child: const Text('Cancel'),
                                 ),
-                              ),
-                          ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                      // Cancel sits under the progress bar, like Cancel scan.
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: TextButton.icon(
+                          onPressed: _cancelling ? null : _cancelReel,
+                          icon: const Icon(Icons.close, size: 18),
+                          label: Text(
+                            _cancelling ? 'Stopping…' : 'Cancel reel',
+                          ),
+                        ),
+                      ),
+                    ],
                   )
                 : FilledButton.icon(
                     onPressed: _photos.isEmpty ? null : _createReel,

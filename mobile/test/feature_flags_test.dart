@@ -36,7 +36,8 @@ void main() {
         FeatureFlags.current.videoEnabled,
         FeatureFlags.defaultVideoEnabled,
       );
-      expect(FeatureFlags.defaultVideoEnabled, isTrue);
+      // The first Play release is photo-only, so videos are off by default.
+      expect(FeatureFlags.defaultVideoEnabled, isFalse);
     });
   });
 

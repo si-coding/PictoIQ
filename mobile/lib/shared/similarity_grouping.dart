@@ -395,12 +395,38 @@ enum ContentFilter {
   peopleAndScenery(
     'People and scenery only',
     'An on-device model leaves out documents, screens, food and other objects. Photos with faces, and photos of places and nature, stay. Nothing leaves your phone.',
+  ),
+  peopleOnly(
+    'People only',
+    'Only photos where a person is clearly the subject. Scenery, objects, screens and photos with a tiny, far-away person are left out. Nothing leaves your phone.',
+  ),
+  sceneryOnly(
+    'Scenery only',
+    'Only photos of places and nature. Photos of people, objects, screens and documents are left out. Nothing leaves your phone.',
   );
 
   const ContentFilter(this.label, this.description);
 
   final String label;
   final String description;
+
+  /// Photos where a person is the subject are shown.
+  bool get includesPeople => this != sceneryOnly;
+
+  /// Photos of places and nature are shown.
+  bool get includesScenery => this != peopleOnly;
+
+  /// The filter for the "People" and "Scenery" switches. Neither switched on
+  /// means every photo is considered.
+  static ContentFilter fromChoice({
+    required bool people,
+    required bool scenery,
+  }) {
+    if (people && scenery) return peopleAndScenery;
+    if (people) return peopleOnly;
+    if (scenery) return sceneryOnly;
+    return everything;
+  }
 }
 
 /// What to do with pages of text, receipts and similar document images.
@@ -1180,11 +1206,12 @@ List<SimilarityCluster> _clusterByContent(
       if (distance > hashGate && !trusted) return false;
       // Same people in the same clothes: everyone in the photo with fewer
       // people must have a match in the other one.
-      if (clothingConflict(
-        earlier.people,
-        current.people,
-        thresholds.maxSubjectDistance,
-      )) {
+      // Photos taken minutes apart at the same place get more slack: people
+      // swap places, turn around or hold something that covers their clothes.
+      final subjectLimit = trusted
+          ? math.min(1.0, thresholds.maxSubjectDistance * 1.6)
+          : thresholds.maxSubjectDistance;
+      if (clothingConflict(earlier.people, current.people, subjectLimit)) {
         return false;
       }
       final a = earlier.colorLayout;
@@ -1251,6 +1278,7 @@ List<SimilarityCluster> _clusterByContent(
         component,
         links,
         thresholds.splitShare,
+        minLinks: thresholds.trustedGapMs > 0 ? 3 : 0,
       ))
         if (group.length > 1)
           SimilarityCluster(
@@ -1267,11 +1295,17 @@ List<SimilarityCluster> _clusterByContent(
 /// group only when it is directly alike at least half of the photos already
 /// in it, so a group is a set of mutually similar shots (same people, same
 /// pose, same spot) rather than a chain.
+///
+/// With [minLinks] above 0, a photo directly alike that many photos of the
+/// group also stays, however big the group: in a big moment (a family photo
+/// shot 14 times) a few shots with people in other places link to only a few
+/// of the rest, and must not be split off as a second moment.
 List<List<int>> _splitLooseChain(
   List<int> component,
   List<Set<int>> links,
-  double minShare,
-) {
+  double minShare, {
+  int minLinks = 0,
+}) {
   if (component.length < 4) return [component];
   final remaining = [...component]
     ..sort((a, b) {
@@ -1287,7 +1321,9 @@ List<List<int>> _splitLooseChain(
       for (final candidate in remaining) {
         final shared = group.where(links[candidate].contains).length;
         final share = shared / group.length;
-        if (share >= minShare && share > bestShare) {
+        final enough =
+            share >= minShare || (minLinks > 0 && shared >= minLinks);
+        if (enough && share > bestShare) {
           best = candidate;
           bestShare = share;
         }

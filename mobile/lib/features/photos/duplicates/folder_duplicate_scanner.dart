@@ -1,4 +1,4 @@
-import 'dart:io' show Directory, File;
+import 'dart:io' show Directory, File, Platform;
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -109,7 +109,12 @@ class FolderScanPhoto {
     this.documentDetail,
     this.latitude,
     this.longitude,
+    this.isFavorite = false,
   });
+
+  /// True when the person marked this photo as a favourite in their gallery.
+  /// A favourite is always kept, never offered for removal.
+  final bool isFavorite;
 
   /// Where the photo was taken (degrees) when its EXIF says so.
   final double? latitude;
@@ -175,6 +180,7 @@ class FolderScanPhoto {
     documentDetail: documentDetail,
     latitude: latitude,
     longitude: longitude,
+    isFavorite: isFavorite,
   );
 
   /// Copy carrying the group-relative score and reasons from [rankShots].
@@ -201,6 +207,7 @@ class FolderScanPhoto {
     documentDetail: documentDetail,
     latitude: latitude,
     longitude: longitude,
+    isFavorite: isFavorite,
   );
 
   DateTime? get modifiedDate =>
@@ -571,7 +578,11 @@ class _SourceFile {
     required this.lastModified,
     required this.dateMs,
     this.isCandidate = true,
+    this.isFavorite = false,
   });
+
+  /// Marked as a favourite in the phone's gallery (media library only).
+  final bool isFavorite;
 
   final String uri;
   final String name;
@@ -766,6 +777,7 @@ class FolderDuplicateScanner {
           length: 0,
           lastModified: asset.modifiedDateTime.millisecondsSinceEpoch,
           dateMs: asset.createDateTime.millisecondsSinceEpoch,
+          isFavorite: asset.isFavorite,
         );
       }
     }
@@ -872,7 +884,7 @@ class FolderDuplicateScanner {
     FolderDateRange dateRange = FolderDateRange.currentFolder,
     DateTime? rangeFrom,
     DateTime? rangeTo,
-    int concurrency = 3,
+    int? concurrency,
     void Function(int found, int checked)? onListed,
     void Function(int total)? onTotal,
     void Function(int imagesScanned)? onProgress,
@@ -930,6 +942,7 @@ class FolderDuplicateScanner {
           String relativePath,
           int length,
           int lastModified,
+          bool isFavorite,
         })>[];
     var checked = 0;
     final source = folderUri.startsWith(albumPrefix)
@@ -960,6 +973,7 @@ class FolderDuplicateScanner {
         relativePath: file.relativePath,
         length: file.length,
         lastModified: file.lastModified,
+        isFavorite: file.isFavorite,
       ));
     }
     onListed?.call(pending.length, checked);
@@ -972,6 +986,7 @@ class FolderDuplicateScanner {
         String relativePath,
         int length,
         int lastModified,
+        bool isFavorite,
       })
       file,
     ) async {
@@ -1063,6 +1078,7 @@ class FolderDuplicateScanner {
           documentDetail: analysis?.documentDetail,
           latitude: analysis?.location?.$1,
           longitude: analysis?.location?.$2,
+          isFavorite: file.isFavorite,
         );
         images.add(photo);
         imagesScanned += 1;
@@ -1088,7 +1104,8 @@ class FolderDuplicateScanner {
     }
 
     await Future.wait([
-      for (var i = 0; i < math.max(1, concurrency); i++) worker(),
+      for (var i = 0; i < math.max(1, concurrency ?? defaultScanConcurrency()); i++)
+        worker(),
     ]);
     // Workers finish in any order; keep results stable.
     images.sort((a, b) => a.relativePath.compareTo(b.relativePath));
@@ -1334,14 +1351,31 @@ class FolderDuplicateScanner {
       return true;
     }
     if (contentFilter == ContentFilter.everything) return false;
+    if (photo.isDocumentLike) return true;
     final faces = photo.features?.faces;
-    return photo.isDocumentLike ||
-        !isPeopleOrScenery(
-          faceCount: faces == null
-              ? null
-              : (faces.hasProminentFace ? faces.count : 0),
-          labels: photo.features?.labels,
-        );
+    final faceCount = faces == null
+        ? null
+        : (faces.hasProminentFace ? faces.count : 0);
+    final labels = photo.features?.labels;
+    // When people are wanted, a photo whose main person is out of focus is
+    // left out: it is a people photo nobody would keep (it is also what the
+    // "Unclear people photos" clutter type finds).
+    if (contentFilter.includesPeople &&
+        faces != null &&
+        faces.isUnclearSubject()) {
+      return true;
+    }
+    return switch (contentFilter) {
+      ContentFilter.peopleOnly => !isAboutPeople(
+        faceCount: faceCount,
+        labels: labels,
+      ),
+      ContentFilter.sceneryOnly => !isAboutScenery(
+        faceCount: faceCount,
+        labels: labels,
+      ),
+      _ => !isPeopleOrScenery(faceCount: faceCount, labels: labels),
+    };
   }
 
   /// Names what is in the photo, using the on-device ML Kit labeller. Returns
@@ -1431,6 +1465,29 @@ class FolderDuplicateScanner {
             a.boundingBox.width * a.boundingBox.height,
           ),
         );
+      // How sharp the largest face is, and how sharp the whole picture is on
+      // the same scale: a crisp background behind a soft face is the usual
+      // "person is not clear" photo.
+      final biggest = bySize.first.boundingBox;
+      final faceSharpness = regionSharpness(
+        rgba,
+        width,
+        height,
+        biggest.left.floor(),
+        biggest.top.floor(),
+        biggest.right.ceil(),
+        biggest.bottom.ceil(),
+      );
+      final frameSharpness = regionSharpness(
+        rgba,
+        width,
+        height,
+        0,
+        0,
+        width,
+        height,
+        step: 3,
+      );
       final whole = regionHistogram(rgba, width, height, 0, 0, width, height);
       final personColors = <List<double>>[];
       for (final face in bySize.take(4)) {
@@ -1459,6 +1516,8 @@ class FolderDuplicateScanner {
         edgeCutoff: edgeCutoff,
         lookingAwayMax: lookingAwayMax,
         largestFaceArea: largestFace / (width * height),
+        faceSharpness: faceSharpness,
+        frameSharpness: frameSharpness,
       );
     } on PlatformException catch (error) {
       // Keep the detail: the type alone cannot tell a missing model from a
@@ -1597,4 +1656,12 @@ FolderDuplicateGroup rankedGroup(
     evidence: evidence,
     ranking: ranking,
   );
+}
+
+/// How many photos are analysed at once. Each runs in its own isolate, so more
+/// cores means more at once; capped at 6 because every photo in flight holds
+/// its full file in memory. 3 on a small phone, 5 on an 8-core one.
+int defaultScanConcurrency([int? cores]) {
+  final count = cores ?? Platform.numberOfProcessors;
+  return (count ~/ 2 + 1).clamp(3, 6).toInt();
 }

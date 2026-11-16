@@ -16,11 +16,11 @@ const _muted = AppColors.body;
 /// The groups of settings that belong to one tool. The same controls are
 /// shown on the Settings page, on a tool's Find screen and above its results.
 enum SettingsCategory {
-  bestMoments('Best moments', 'Update Best Moments Filter'),
-  bestShot('Best shot and similar photos', 'Update Best Shots Filter'),
-  duplicates('Exact duplicates', 'Update Duplicate Photo Filter'),
-  clutter('Clutter', 'Update Clutter Filter'),
-  video('Exact duplicate videos', 'Update Duplicate Video Filter');
+  bestMoments('Best moments', 'Change Filter'),
+  bestShot('Best shot and similar photos', 'Change Filter'),
+  duplicates('Exact duplicates', 'Change Filter'),
+  clutter('Clutter', 'Change Filter'),
+  video('Exact duplicate videos', 'Change Filter');
 
   const SettingsCategory(this.title, this.filterTitle);
   final String title;
@@ -42,7 +42,7 @@ List<String> settingsParts(SettingsCategory category, AppSettings s) {
       s.momentWindow.label,
       if (s.momentPlace != MomentPlace.off) s.momentPlace.label,
       '${s.momentCount} photo${s.momentCount == 1 ? '' : 's'} each',
-      if (s.momentShowScenes) 'with no-people moments',
+      s.contentFilter.label,
     ],
     SettingsCategory.bestShot => [
       '${s.matchLevel.label} match',
@@ -83,14 +83,13 @@ List<Widget> duplicateSettingsChildren(
   AppSettings s,
   SettingsChanged change,
 ) => [
-  settingsChoice<ContentFilter>(
-    title: 'Which photos to include',
-    values: ContentFilter.values,
-    selected: s.contentFilter,
-    label: (mode) => mode.label,
-    onSelected: (mode) => change(s.copyWith(contentFilter: mode)),
-    note: s.contentFilter.description,
-  ),
+  ...sharedPhotoSettings(s, change),
+];
+
+/// The two choices every photo tool shares: which kinds of photo to include
+/// (people, scenery, or both) and what to do with documents and screenshots.
+List<Widget> sharedPhotoSettings(AppSettings s, SettingsChanged change) => [
+  settingsContentChips(s, change),
   settingsChoice<DocumentMode>(
     title: 'Documents and screenshots of pages',
     values: DocumentMode.values,
@@ -101,7 +100,60 @@ List<Widget> duplicateSettingsChildren(
   ),
 ];
 
+/// "People" and "Scenery" can be switched on together. Neither on means every
+/// photo is considered.
+Widget settingsContentChips(AppSettings s, SettingsChanged change) {
+  final filter = s.contentFilter;
+  final people = filter != ContentFilter.everything && filter.includesPeople;
+  final scenery = filter != ContentFilter.everything && filter.includesScenery;
+  void choose({required bool people, required bool scenery}) => change(
+    s.copyWith(
+      contentFilter: ContentFilter.fromChoice(people: people, scenery: scenery),
+    ),
+  );
+
+  return Padding(
+    padding: const EdgeInsets.only(top: 14, bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Which photos to include',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            FilterChip(
+              label: const Text('People'),
+              selected: people,
+              showCheckmark: false,
+              onSelected: (on) => choose(people: on, scenery: scenery),
+            ),
+            FilterChip(
+              label: const Text('Scenery'),
+              selected: scenery,
+              showCheckmark: false,
+              onSelected: (on) => choose(people: people, scenery: on),
+            ),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            filter.description,
+            style: const TextStyle(fontSize: 12, color: _muted),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 List<Widget> momentSettingsChildren(AppSettings s, SettingsChanged change) => [
+          ...sharedPhotoSettings(s, change),
           settingsChoice<MomentWindow>(
             title: 'How long a moment can last',
             values: MomentWindow.values,
@@ -137,14 +189,6 @@ List<Widget> momentSettingsChildren(AppSettings s, SettingsChanged change) => [
             value: s.momentSeparateTypes,
             onChanged: (value) =>
                 change(s.copyWith(momentSeparateTypes: value)),
-          ),
-          settingsSwitch(
-            title: 'Show moments with no people',
-            subtitle:
-                'Objects, rooms and screenshots. Usually clutter, so they are hidden.',
-            value: s.momentShowScenes,
-            onChanged: (value) =>
-                change(s.copyWith(momentShowScenes: value)),
           ),
           settingsChoice<int>(
             title: 'Photos shown per moment',
@@ -207,24 +251,7 @@ List<Widget> bestShotSettingsChildren(AppSettings s, SettingsChanged change) => 
             note:
                 '${s.timeMode.description}${s.timeMode == TimeMode.off || s.timeMode == TimeMode.hint ? '' : ' Uses camera time, else a date in the file name, else the file date; files that were copied or downloaded can carry misleading dates, and then fewer photos will group.'}',
           ),
-          settingsChoice<ContentFilter>(
-            title: 'Which photos to include',
-            values: ContentFilter.values,
-            selected: s.contentFilter,
-            label: (mode) => mode.label,
-            onSelected: (mode) =>
-                change(s.copyWith(contentFilter: mode)),
-            note: s.contentFilter.description,
-          ),
-          settingsChoice<DocumentMode>(
-            title: 'Documents and screenshots of pages',
-            values: DocumentMode.values,
-            selected: s.documentMode,
-            label: (mode) => mode.label,
-            onSelected: (mode) =>
-                change(s.copyWith(documentMode: mode)),
-            note: s.documentMode.description,
-          ),
+          ...sharedPhotoSettings(s, change),
           settingsSwitch(
             title: 'Use faces and eyes when ranking',
             subtitle:
@@ -592,8 +619,14 @@ class ScanScopeCard extends StatefulWidget {
     this.scannedLine,
     this.onViewFiles,
     this.menu,
+    this.showScanDetails = true,
     this.margin = EdgeInsets.zero,
   });
+
+  /// False when the screen shows the scan's facts itself (the photo results
+  /// page does, in its "found" section): the card is then only the
+  /// collapsible "Change Filter" panel.
+  final bool showScanDetails;
 
   final String folder;
 
@@ -650,9 +683,94 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
     ),
   );
 
+  Widget _filterBody(bool changed) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      CategorySettingsBody(
+        category: widget.category,
+        settings: _s,
+        inset: false,
+        onChanged: (value) {
+          setState(() => _s = value);
+          widget.onChanged(value);
+        },
+      ),
+      if (changed) ...[
+        const SizedBox(height: 12),
+        FilledButton.icon(
+          onPressed: widget.onFindAgain,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Find again with these filters'),
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+        ),
+      ],
+    ],
+  );
+
+  Widget _compact(bool changed) => Padding(
+    padding: widget.margin,
+    child: Material(
+      color: Colors.white,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        side: const BorderSide(color: AppColors.tintBorder),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _open = !_open),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.tune, color: _green, size: 22),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Change Filter',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (!_open)
+                          Text(
+                            settingsSummary(widget.category, _s),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, color: _muted),
+                          ),
+                      ],
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: _open ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: const Icon(Icons.expand_more, color: _green),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: _filterBody(changed),
+            ),
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     final changed = _s != widget.scannedWith;
+    if (!widget.showScanDetails) return _compact(changed);
     return Padding(
       padding: widget.margin,
       child: Material(
@@ -791,7 +909,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                       ),
                     const SizedBox(height: 6),
                     Text(
-                      widget.category.filterTitle.replaceFirst('Update ', ''),
+                      'Filters',
                       style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                     CategorySettingsBody(

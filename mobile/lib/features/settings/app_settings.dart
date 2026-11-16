@@ -36,7 +36,7 @@ class AppSettings {
     this.showEvents = true,
     this.timeMode = TimeMode.hint,
     this.documentMode = DocumentMode.leaveOut,
-    this.contentFilter = ContentFilter.everything,
+    this.contentFilter = ContentFilter.peopleAndScenery,
     this.momentWindow = MomentWindow.activity,
     this.momentCount = 2,
     this.momentVariety = MomentVariety.balanced,

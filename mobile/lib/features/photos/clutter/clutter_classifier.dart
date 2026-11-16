@@ -1,6 +1,7 @@
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart'
     show FolderScanPhoto;
 import 'package:pictoiq_mobile/shared/photo_content.dart';
+import 'package:pictoiq_mobile/shared/shot_ranking.dart' show FaceSignals;
 
 /// Why a photo is probably clutter. Every photo gets at most one reason, the
 /// first that applies in the order of [ClutterKind.values].
@@ -12,6 +13,10 @@ enum ClutterKind {
     'Photos of a slide, a screen or an object, not of people or places.',
   ),
   blank('Blank or very dark', 'Black or white frames, pocket shots.'),
+  unclearPeople(
+    'Unclear people photos',
+    'A person is in the photo, but their face is soft or out of focus.',
+  ),
   blurry('Blurry', 'Soft all over, so nothing in focus.'),
   small('Tiny images', 'Very low resolution, such as forwards and stickers.');
 
@@ -53,7 +58,20 @@ class ClutterThresholds {
     this.darkMeanLuma = 30,
     this.darkShadowShare = 0.6,
     this.smallMegapixels = 0.25,
+    this.unclearFaceSharpness = 3,
+    this.unclearFaceRatio = 0.08,
+    this.unclearFrameSharpness = 60,
   });
+
+  /// A person's face sharper than this is never called unclear (see
+  /// `FaceSignals.faceSharpness`), and one softer than this always is.
+  final double unclearFaceSharpness;
+
+  /// A face this much softer than the rest of the picture (and the picture
+  /// itself in focus, see [unclearFrameSharpness]) means the focus landed
+  /// behind the person.
+  final double unclearFaceRatio;
+  final double unclearFrameSharpness;
 
   /// Sharpness (see `ImageSignals.sharpness`) below this counts as blurry.
   final double blurrySharpness;
@@ -77,6 +95,22 @@ final _screenshotWords = RegExp(
 /// True when the file name or its folder says it is a screenshot.
 bool looksLikeScreenshot(String name, String relativePath) =>
     _screenshotWords.hasMatch(name) || _screenshotWords.hasMatch(relativePath);
+
+/// True when a person is clearly the subject of the photo but their face is
+/// soft: either soft in absolute terms, or much softer than a picture that is
+/// otherwise in focus (the camera focused on the background). Small, distant
+/// faces are not judged, because a face of a few pixels is always soft.
+bool isUnclearPerson(
+  FaceSignals? faces, [
+  ClutterThresholds thresholds = const ClutterThresholds(),
+]) {
+  return faces != null &&
+      faces.isUnclearSubject(
+        minSharpness: thresholds.unclearFaceSharpness,
+        ratio: thresholds.unclearFaceRatio,
+        minFrameSharpness: thresholds.unclearFrameSharpness,
+      );
+}
 
 /// The reason [photo] is clutter, or null when it is a normal photo.
 ///
@@ -106,7 +140,9 @@ ClutterKind? clutterKindOf(
           signals.shadowClip > thresholds.darkShadowShare)) {
     return ClutterKind.blank;
   }
-  if (hasFaces) return null;
+  if (hasFaces) {
+    return isUnclearPerson(faces, thresholds) ? ClutterKind.unclearPeople : null;
+  }
   if (signals.sharpness < thresholds.blurrySharpness) return ClutterKind.blurry;
   if (features.megapixels > 0 &&
       features.megapixels < thresholds.smallMegapixels) {
@@ -127,6 +163,8 @@ List<ClutterItem> findClutter(
 }) {
   final items = <ClutterItem>[];
   for (final photo in photos) {
+    // A photo the person starred is never suggested as clutter.
+    if (photo.isFavorite) continue;
     final kind = clutterKindOf(photo, thresholds: thresholds);
     if (kind == null || leaveOut.contains(kind)) continue;
     items.add(ClutterItem(photo: photo, kind: kind));

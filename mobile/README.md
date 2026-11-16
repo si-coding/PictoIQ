@@ -99,11 +99,11 @@ See `docs/play-release-checklist.md` (signing, bundle, Play Console steps), `doc
 
 `lib/core/config/feature_flags.dart` holds switches that turn parts of the app on or off for a build. Set one with `--dart-define`:
 
-- `PICTOIQ_VIDEO` (default `true`): the Videos side of the app. `false` hides the Photos | Videos switch, the video tools and the Videos section in Settings, and the app requests photo access only.
+- `PICTOIQ_VIDEO` (default `false`, so the build is photo-only): the Videos side of the app. `false` hides the Photos | Videos switch, the video tools and the Videos section in Settings, and the app requests photo access only.
 
 ```
-flutter run --dart-define=PICTOIQ_VIDEO=false
-flutter build appbundle --dart-define=PICTOIQ_VIDEO=false
+flutter run --dart-define=PICTOIQ_VIDEO=true        # turn videos on
+flutter build appbundle                              # photo-only (the default)
 ```
 
-To change the default for every build, edit `defaultVideoEnabled` in that file. For a photo-only Play release also remove the READ_MEDIA_VIDEO line from the manifest (see `docs/play-release-checklist.md`).
+To change the default for every build, edit `defaultVideoEnabled` in that file. The first Play release is photo-only: it is built with the default (videos off) and the READ_MEDIA_VIDEO line in the manifest is commented out (see `docs/play-release-checklist.md`; the video wording removed from the store listing and privacy policy is kept in `docs/video-release-text.md`).

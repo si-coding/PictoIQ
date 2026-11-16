@@ -2,8 +2,10 @@ package com.pictoiq.app
 
 import android.app.Activity
 import android.content.Intent
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.StatFs
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -37,6 +39,22 @@ class MainActivity : FlutterActivity() {
                 reelProgressSink = null
             }
         })
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.pictoiq.app/device",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "freeBytes" -> {
+                    try {
+                        val stat = StatFs(Environment.getDataDirectory().path)
+                        result.success(stat.availableBytes)
+                    } catch (error: Exception) {
+                        result.error("storage_unavailable", error.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "com.pictoiq.app/video_reel",

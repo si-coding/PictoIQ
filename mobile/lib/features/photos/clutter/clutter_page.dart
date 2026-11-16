@@ -5,6 +5,9 @@ import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
+import 'package:pictoiq_mobile/features/photos/library/photo_explain.dart';
+import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart'
+    show showPhotoDetails;
 import 'package:pictoiq_mobile/core/config/app_colors.dart';
 
 const _ink = AppColors.ink;
@@ -125,6 +128,16 @@ class _ClutterPageState extends State<ClutterPage> {
                 ],
               ),
             ),
+            if (explainPhoto(item.photo).isNotEmpty)
+              TextButton.icon(
+                onPressed: () => showPhotoDetails(
+                  dialogContext,
+                  item.photo.relativePath,
+                  explainPhoto(item.photo),
+                ),
+                icon: const Icon(Icons.info_outline, size: 18),
+                label: const Text('Why is this here?'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Close'),

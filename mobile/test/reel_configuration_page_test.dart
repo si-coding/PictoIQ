@@ -140,7 +140,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Create reel'));
     await tester.pump();
-    await tester.tap(find.text('Cancel'));
+    await tester.tap(find.text('Cancel reel'));
     await tester.pumpAndSettle();
 
     expect(cancelRequested, isTrue);

@@ -32,7 +32,7 @@ void main() {
       ),
     );
     expect(find.text('How closely photos must match'), findsNothing);
-    await tester.tap(find.text('Update Best Shots Filter'));
+    await tester.tap(find.text('Change Filter'));
     await tester.pumpAndSettle();
     expect(find.text('How closely photos must match'), findsOneWidget);
     // "Strict" also names a time option, so take the match-level chip, which

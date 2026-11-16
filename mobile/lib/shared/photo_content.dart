@@ -55,6 +55,60 @@ const objectLabels = {
   
 };
 
+/// The strongest label in each group, for showing why a photo was kept or
+/// left out. Each value is 0 when the labeller saw nothing of that kind.
+({double people, double scenery, double thing}) labelScores(
+  List<PhotoLabel> labels,
+) {
+  double best(Set<String> names) {
+    var top = 0.0;
+    for (final label in labels) {
+      if (names.contains(label.name.toLowerCase()) &&
+          label.confidence > top) {
+        top = label.confidence;
+      }
+    }
+    return top;
+  }
+
+  return (
+    people: best(peopleLabels),
+    scenery: best(sceneryLabels),
+    thing: best(objectLabels),
+  );
+}
+
+/// Whether a person is clearly the subject of a photo (the "people only"
+/// filter). A clear face is enough. Otherwise the labeller must be sure about
+/// people, and at least about as sure as it is about any object, so a speaker
+/// far across a hall is not a photo of a person. Scenery alone does not count.
+/// Unknown (the labeller did not run or failed) is kept, never hidden.
+bool isAboutPeople({
+  required int? faceCount,
+  required List<PhotoLabel>? labels,
+  double strong = 0.6,
+}) {
+  if (faceCount != null && faceCount > 0) return true;
+  if (labels == null) return true;
+  final scores = labelScores(labels);
+  return scores.people >= strong && scores.people >= scores.thing - 0.15;
+}
+
+/// Whether a photo is of a place or nature, with no person as the subject (the
+/// "scenery only" filter). A clear face means it is a people photo. Otherwise
+/// the labeller must be sure about scenery, and at least about as sure as it
+/// is about any object. Unknown (the labeller did not run or failed) is kept.
+bool isAboutScenery({
+  required int? faceCount,
+  required List<PhotoLabel>? labels,
+  double strong = 0.6,
+}) {
+  if (faceCount != null && faceCount > 0) return false;
+  if (labels == null) return true;
+  final scores = labelScores(labels);
+  return scores.scenery >= strong && scores.scenery >= scores.thing - 0.15;
+}
+
 /// Whether a photo shows people or scenery (so it belongs in the results when
 /// the person chose "people and scenery only"). Unknown is kept: a photo is
 /// only left out when the labeller was confident it shows a document, a

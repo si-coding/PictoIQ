@@ -140,7 +140,7 @@ void main() {
     );
     expect(
       AppSettings.fromJson({'contentFilter': 'x'}).contentFilter,
-      ContentFilter.everything,
+      ContentFilter.peopleAndScenery,
     );
   });
 

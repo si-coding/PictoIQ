@@ -26,6 +26,12 @@ import 'package:pictoiq_mobile/core/database/database_service.dart';
 import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dart';
 import 'package:pictoiq_mobile/core/media/media_asset.dart';
 import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
+import 'package:pictoiq_mobile/core/device/device_storage.dart';
+import 'package:pictoiq_mobile/core/storage/private_photos.dart';
+import 'package:pictoiq_mobile/features/photos/share/share_guard.dart';
+import 'package:pictoiq_mobile/features/photos/share/sensitive_warning.dart';
+import 'package:pictoiq_mobile/shared/sensitive_content.dart';
+import 'package:pictoiq_mobile/features/photos/library/photo_explain.dart';
 import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
 import 'package:pictoiq_mobile/features/scan/scan_configuration_page.dart';
@@ -260,6 +266,12 @@ class LibraryPage extends StatefulWidget {
 class _LibraryPageState extends State<LibraryPage> {
   final _picker = ImagePicker();
   final _folderScanner = FolderDuplicateScanner();
+
+  /// Photos marked private, and the check for sensitive pictures. Both are
+  /// applied before anything is shared or put in a reel.
+  final _privatePhotos = PrivatePhotoStore();
+  final SensitiveContentDetector _sensitiveDetector =
+      const NoSensitiveDetector();
   final _videoReelService = VideoReelService();
   final _videoScanner = VideoDuplicateScanner();
 
@@ -332,6 +344,8 @@ class _LibraryPageState extends State<LibraryPage> {
 
   /// Lets the home screen scroll to the main scan button.
   final _mainScanKey = GlobalKey();
+  final _bestResultsKey = GlobalKey();
+  final _exactResultsKey = GlobalKey();
   final _scanCancelKey = GlobalKey();
   final _scanProgressRevision = ValueNotifier<int>(0);
   final _scrollController = ScrollController();
@@ -459,6 +473,7 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_privatePhotos.load());
     AppMenuActions.openSettings = _openSettings;
     AppMenuActions.showPrivacy = _showPrivacy;
     AppMenuActions.goHome = _goHome;
@@ -472,6 +487,21 @@ class _LibraryPageState extends State<LibraryPage> {
     });
   }
 
+  /// Once new results are on screen, glides down past the summary to the
+  /// first photos, so the person lands on the photos, not the top of the page.
+  Future<void> _scrollToResults({required bool bestShots}) async {
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+    final target = (bestShots ? _bestResultsKey : _exactResultsKey)
+        .currentContext;
+    if (target == null || !target.mounted) return;
+    await Scrollable.ensureVisible(
+      target,
+      duration: const Duration(milliseconds: 1600),
+      curve: Curves.easeInOutCubic,
+    );
+  }
+
   /// The Home button on every other screen: closes whatever is open above
   /// the home screen and hides the results page, so Home is always what shows.
   void _goHome() {
@@ -483,11 +513,16 @@ class _LibraryPageState extends State<LibraryPage> {
   /// the library has been given.
   ({int photos, int videos, int albums})? _librarySnapshot;
 
+  /// Free space on the phone, shown next to the library totals.
+  int? _freeBytesOnDevice;
+
   Future<void> _loadLibrarySnapshot() async {
     final snapshot = await _folderScanner.librarySnapshot();
     if (mounted && snapshot != null) {
       setState(() => _librarySnapshot = snapshot);
     }
+    final free = await const DeviceStorage().freeBytes();
+    if (mounted && free != null) setState(() => _freeBytesOnDevice = free);
   }
 
   static String _thousands(int value) => value.toString().replaceAllMapped(
@@ -582,10 +617,58 @@ class _LibraryPageState extends State<LibraryPage> {
     return picks;
   }
 
+  /// Checks [photos] before they are shared or put in a reel. Photos marked
+  /// private, or found sensitive, are never included: the person is warned and
+  /// can review them or carry on without them. Returns the photos that may be
+  /// used, or null when the person cancels or nothing is left.
+  Future<List<FolderScanPhoto>?> _screenForSharing(
+    List<FolderScanPhoto> photos, {
+    required String action,
+  }) async {
+    final screening = await screenForSharing(
+      photos,
+      markedPrivate: _privatePhotos.all,
+      detector: _sensitiveDetector,
+      loadBytes: _folderScanner.loadLargePreview,
+    );
+    if (screening.blocked.isEmpty) return screening.clear;
+    if (!mounted) return null;
+    final choice = await showSensitiveWarning(
+      context,
+      blocked: screening.blocked.length,
+      remaining: screening.clear.length,
+      action: action,
+    );
+    if (choice == null || !mounted) return null;
+    if (choice == SensitiveChoice.review) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => PhotoViewerPage(
+            photos: [
+              for (final photo in screening.blocked)
+                ViewerPhoto(
+                  title: photo.relativePath,
+                  preview: photo.previewBytes,
+                  loadLarge: () => _folderScanner.loadLargePreview(photo.uri),
+                  isPrivate: _privatePhotos.contains(photo.uri),
+                  onPrivateChanged: (value) =>
+                      _privatePhotos.setPrivate(photo.uri, value),
+                ),
+            ],
+          ),
+        ),
+      );
+      return null;
+    }
+    return screening.clear.isEmpty ? null : screening.clear;
+  }
+
   /// Opens Android's share sheet with [photos]; WhatsApp (status or chat),
   /// Instagram and Facebook appear there when they are installed.
-  Future<void> _sharePhotos(List<FolderScanPhoto> chosen) async {
-    if (chosen.isEmpty) return;
+  Future<void> _sharePhotos(List<FolderScanPhoto> picks) async {
+    if (picks.isEmpty) return;
+    final chosen = await _screenForSharing(picks, action: 'share');
+    if (chosen == null || chosen.isEmpty || !mounted) return;
     // Let the person look at (and drop) photos before anything is sent.
     final photos = await Navigator.of(context).push<List<FolderScanPhoto>>(
       MaterialPageRoute(
@@ -637,13 +720,14 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _createPhotoReel(FolderScanResult scan) async {
     if (_creatingReel) return;
-    final photos = _picksToShare(scan.duplicateGroups)
-        .take(_settings.reelMaxPhotos)
-        .toList();
-    if (photos.isEmpty) {
+    final picks = _picksToShare(scan.duplicateGroups);
+    if (picks.isEmpty) {
       _showMessage('No selected photos are available to add to a reel.');
       return;
     }
+    final allowed = await _screenForSharing(picks, action: 'put in a reel');
+    if (allowed == null || allowed.isEmpty || !mounted) return;
+    final photos = allowed.take(_settings.reelMaxPhotos).toList();
 
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
@@ -1283,7 +1367,9 @@ class _LibraryPageState extends State<LibraryPage> {
                 if (photo.features?.signals.isBlank ?? false) photo.uri,
           });
         }
-        if (moments && !_settings.momentShowScenes) {
+        if (moments &&
+            !(_settings.momentShowScenes ||
+                _settings.contentFilter.includesScenery)) {
           result = result.withoutGroups({
             for (final group in result.duplicateGroups)
               if (group.photos.every((p) => p.features?.faces?.count == 0))
@@ -1300,6 +1386,9 @@ class _LibraryPageState extends State<LibraryPage> {
             _folderScan = result;
           }
         });
+        if (result.duplicateGroups.isNotEmpty) {
+          unawaited(_scrollToResults(bestShots: bestShots));
+        }
         _showResultPopup(
           result.duplicateGroups.isEmpty
               ? _noGroupsText(result, bestShots: bestShots)
@@ -1375,7 +1464,30 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Which photos of [group] to keep. See [decideKeepers] for the rules; in
   /// short, every thumbs-up photo is kept, otherwise the top-ranked photo that
   /// was not thumbed down, and nothing at all when the user prefers to choose.
+  ///
+  /// Photos the person starred as favourites in their gallery are always kept
+  /// too. If that adds a keeper the ranking did not choose, the group is left
+  /// for the person to review instead of being cleaned up in bulk.
   KeepDecision _decisionFor(
+    FolderDuplicateGroup group, {
+    required bool bestShots,
+  }) {
+    final base = _baseDecisionFor(group, bestShots: bestShots);
+    final favorites = {
+      for (final photo in group.photos)
+        if (photo.isFavorite) photo.uri,
+    };
+    if (favorites.isEmpty || favorites.every(base.keepIds.contains)) {
+      return base;
+    }
+    return KeepDecision(
+      keepIds: {...base.keepIds, ...favorites},
+      isUserChoice: base.isUserChoice,
+      needsReview: base.isUserChoice ? base.needsReview : true,
+    );
+  }
+
+  KeepDecision _baseDecisionFor(
     FolderDuplicateGroup group, {
     required bool bestShots,
   }) {
@@ -2316,7 +2428,7 @@ class _LibraryPageState extends State<LibraryPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     // The Library tab remains hidden for now; bottom destinations control the
-    // media mode, Settings, and Privacy.
+    // media mode and, for the results on screen, Share and Create reel.
     body: _tab == 0 && !_scanActive && _showResultsPage
         ? AppBackground(
             child: Column(
@@ -2330,47 +2442,124 @@ class _LibraryPageState extends State<LibraryPage> {
     bottomNavigationBar: _bottomNavigationBar(),
   );
 
-  Widget _bottomNavigationBar() => NavigationBar(
-    height: 68,
-    selectedIndex: _videoMode ? 1 : 0,
-    onDestinationSelected: (index) {
-      if (_scanActive || _importing) return;
-      final settingsIndex = _videoEnabled ? 2 : 1;
-      final privacyIndex = settingsIndex + 1;
-      if (index == 0 || (_videoEnabled && index == 1)) {
-        setState(() {
-          _videoMode = index == 1;
-          _showResultsPage = false;
-        });
-      } else if (index == settingsIndex) {
-        _openSettings();
-      } else if (index == privacyIndex) {
-        _showPrivacy();
-      }
-    },
-    destinations: [
-      const NavigationDestination(
-        icon: Icon(Icons.photo_outlined),
-        selectedIcon: Icon(Icons.photo),
-        label: 'Photos',
-      ),
-      if (_videoEnabled)
+  /// The footer depends on the screen. On the results screen: Photos (back
+  /// home), Share and Create reel. Everywhere else: Photos, [Videos], Settings
+  /// and Privacy.
+  Widget _bottomNavigationBar() {
+    final onResults = _tab == 0 && !_scanActive && _showResultsPage && !_videoMode;
+    if (onResults) return _resultsNavigationBar();
+    final settingsIndex = _videoEnabled ? 2 : 1;
+    return NavigationBar(
+      height: 68,
+      selectedIndex: _videoMode ? 1 : 0,
+      onDestinationSelected: (index) {
+        if (_scanActive || _importing) return;
+        if (index == 0 || (_videoEnabled && index == 1)) {
+          setState(() {
+            _videoMode = index == 1;
+            _showResultsPage = false;
+          });
+        } else if (index == settingsIndex) {
+          unawaited(_openSettings());
+        } else {
+          unawaited(_showPrivacy());
+        }
+      },
+      destinations: [
         const NavigationDestination(
-          icon: Icon(Icons.videocam_outlined),
-          selectedIcon: Icon(Icons.videocam),
-          label: 'Videos',
+          icon: Icon(Icons.photo_outlined),
+          selectedIcon: Icon(Icons.photo),
+          label: 'Photos',
         ),
-      const NavigationDestination(
-        icon: Icon(Icons.settings_outlined),
-        selectedIcon: Icon(Icons.settings),
-        label: 'Settings',
+        if (_videoEnabled)
+          const NavigationDestination(
+            icon: Icon(Icons.videocam_outlined),
+            selectedIcon: Icon(Icons.videocam),
+            label: 'Videos',
+          ),
+        const NavigationDestination(
+          icon: Icon(Icons.settings_outlined),
+          selectedIcon: Icon(Icons.settings),
+          label: 'Settings',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.shield_outlined),
+          label: 'Privacy',
+        ),
+      ],
+    );
+  }
+
+  /// Results footer: only Share and Create reel, in colour. Going home is the
+  /// home button in the top bar.
+  Widget _resultsNavigationBar() {
+    final scan = _bestShotsScan;
+    final canShare =
+        scan != null &&
+        scan.duplicateGroups.isNotEmpty &&
+        _showBestResults &&
+        !_importing &&
+        !_creatingReel;
+    Widget action({
+      required IconData icon,
+      required String label,
+      required Color color,
+      required VoidCallback? onTap,
+    }) {
+      final shown = onTap == null ? Colors.black26 : color;
+      return Expanded(
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: shown, size: 26),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: shown,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Material(
+      elevation: 3,
+      color: Colors.white,
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            action(
+              icon: Icons.ios_share_outlined,
+              label: 'Share',
+              color: const Color(0xFF1E6FD9),
+              onTap: canShare
+                  ? () => unawaited(
+                      _sharePhotos(_picksToShare(scan.duplicateGroups)),
+                    )
+                  : null,
+            ),
+            action(
+              icon: Icons.movie_creation_outlined,
+              label: _creatingReel ? 'Creating…' : 'Create reel',
+              color: const Color(0xFFD9467A),
+              onTap: canShare ? () => unawaited(_createPhotoReel(scan)) : null,
+            ),
+          ],
+        ),
       ),
-      const NavigationDestination(
-        icon: Icon(Icons.shield_outlined),
-        label: 'Privacy',
-      ),
-    ],
-  );
+    );
+  }
 
   /// Which scan results are on screen: the running scan's, otherwise the last
   /// one the user ran (or switched to).
@@ -2437,48 +2626,51 @@ class _LibraryPageState extends State<LibraryPage> {
         ),
       ],
     );
-    return Stack(
-      children: [
-        // A draggable scroll bar for fast scrolling through long results.
-        Scrollbar(
-          controller: _scrollController,
-          interactive: true,
-          thickness: 6,
-          child: scroll,
-        ),
-        Positioned(
-          right: 16,
-          bottom: 16,
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _showTopButton,
-            builder: (context, show, _) => AnimatedSlide(
+    return _withScrollAids(scroll);
+  }
+
+  /// A draggable scroll bar for fast scrolling through long lists, and a
+  /// button that appears further down to jump back to the top.
+  Widget _withScrollAids(Widget scroll) => Stack(
+    children: [
+      Scrollbar(
+        controller: _scrollController,
+        interactive: true,
+        thickness: 6,
+        child: scroll,
+      ),
+      Positioned(
+        right: 16,
+        bottom: 16,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _showTopButton,
+          builder: (context, show, _) => AnimatedSlide(
+            duration: const Duration(milliseconds: 200),
+            offset: show && !_scanActive ? Offset.zero : const Offset(0, 2),
+            child: AnimatedOpacity(
               duration: const Duration(milliseconds: 200),
-              offset: show && !_scanActive ? Offset.zero : const Offset(0, 2),
-              child: AnimatedOpacity(
-                duration: const Duration(milliseconds: 200),
-                opacity: show && !_scanActive ? 1 : 0,
-                child: IgnorePointer(
-                  ignoring: !show || _scanActive,
-                  child: FloatingActionButton.small(
-                    heroTag: 'back-to-top',
-                    tooltip: 'Back to top',
-                    backgroundColor: _green,
-                    foregroundColor: Colors.white,
-                    onPressed: () => _scrollController.animateTo(
-                      0,
-                      duration: const Duration(milliseconds: 450),
-                      curve: Curves.easeOutCubic,
-                    ),
-                    child: const Icon(Icons.keyboard_arrow_up),
+              opacity: show && !_scanActive ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !show || _scanActive,
+                child: FloatingActionButton.small(
+                  heroTag: 'back-to-top',
+                  tooltip: 'Back to top',
+                  backgroundColor: _green,
+                  foregroundColor: Colors.white,
+                  onPressed: () => _scrollController.animateTo(
+                    0,
+                    duration: const Duration(milliseconds: 450),
+                    curve: Curves.easeOutCubic,
                   ),
+                  child: const Icon(Icons.keyboard_arrow_up),
                 ),
               ),
             ),
           ),
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
 
   /// The green header of the results screen: back button, the tool's icon
   /// and its name. It also covers the status bar.
@@ -2553,16 +2745,18 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
           ),
         Expanded(
-          child: CustomScrollView(
-            controller: _scrollController,
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-                sliver: SliverToBoxAdapter(
-                  child: _folderScanSection(bestShots: bestShots),
+          child: _withScrollAids(
+            CustomScrollView(
+              controller: _scrollController,
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                  sliver: SliverToBoxAdapter(
+                    child: _folderScanSection(bestShots: bestShots),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -2901,6 +3095,15 @@ class _LibraryPageState extends State<LibraryPage> {
                   Expanded(
                     child: _heroStat(_thousands(snapshot.albums), 'Albums'),
                   ),
+                  if (_freeBytesOnDevice != null) ...[
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _heroStat(
+                        _formatBytes(_freeBytesOnDevice!),
+                        'Free space',
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2931,7 +3134,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Widget _heroStat(String value, String label) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
     decoration: BoxDecoration(
       color: AppColors.heroStat,
       borderRadius: BorderRadius.circular(16),
@@ -2939,22 +3142,30 @@ class _LibraryPageState extends State<LibraryPage> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          value,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-            color: AppColors.heroStatAccent,
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            value,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: AppColors.heroStatAccent,
+            ),
           ),
         ),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
-            color: AppColors.heroStatLabel,
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            label,
+            maxLines: 1,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: AppColors.heroStatLabel,
+            ),
           ),
         ),
       ],
@@ -3548,8 +3759,6 @@ class _LibraryPageState extends State<LibraryPage> {
         // the page is read in that context.
         _scopeStrip(scan, bestShots: bestShots, groupLabel: groupLabel),
         _resultsHeader(scan, bestShots: bestShots, groupLabel: groupLabel),
-        if (bestShots && scan.duplicateGroups.isNotEmpty)
-          _shareResultsActions(scan),
         if (scan.duplicateGroups.isNotEmpty &&
             !bestShots &&
             _scanRemovals(scan, bestShots: false).isNotEmpty)
@@ -3584,79 +3793,16 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
             ),
           )
-        else
+        else ...[
+          SizedBox(
+            key: bestShots ? _bestResultsKey : _exactResultsKey,
+            height: 0,
+          ),
           ..._resultCards(scan, bestShots: bestShots),
+        ],
       ],
     );
   }
-
-  Widget _shareResultsActions(FolderScanResult scan) => Container(
-    margin: const EdgeInsets.only(top: 10),
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      border: Border.all(color: AppColors.tintBorder),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Row(
-          children: [
-            Icon(Icons.ios_share_outlined, size: 18, color: _green),
-            SizedBox(width: 8),
-            Text(
-              'Share your memories',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
-                color: _ink,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'Share the selected photos, or turn them into a short video reel.',
-          style: TextStyle(fontSize: 12.5, height: 1.35, color: AppColors.body),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () =>
-                    _sharePhotos(_picksToShare(scan.duplicateGroups)),
-                icon: const Icon(Icons.ios_share_outlined, size: 18),
-                label: const Text('Share'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: _green,
-                  side: const BorderSide(color: AppColors.tintBorder),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton.tonalIcon(
-                onPressed: _scanningFolder || _creatingReel
-                    ? null
-                    : () => _createPhotoReel(scan),
-                icon: _creatingReel
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.movie_creation_outlined, size: 18),
-                label: Text(_creatingReel ? 'Creating…' : 'Create reel'),
-                style: FilledButton.styleFrom(foregroundColor: _ink),
-              ),
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
 
   /// The group cards. For best shots they are organised as Event > Scene:
   /// each heading is a stretch of time (a day, an outing) and the cards below
@@ -3861,34 +4007,29 @@ class _LibraryPageState extends State<LibraryPage> {
         ? 'Nothing is ready for bulk cleanup. Check each group below.'
         : 'Ready now: ${ready.length} photo${ready.length == 1 ? '' : 's'} (${_formatBytes(readyBytes)}) in confident groups.';
 
-    Widget tile(String value, String label) => Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.tint,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                value,
-                style: const TextStyle(
-                  color: _green,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
+    // Numbers read as text with the value picked out, not as boxes.
+    Widget stat(String value, String label) => Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: value,
+            style: const TextStyle(
+              color: _green,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
             ),
-            Text(
-              label,
-              maxLines: 2,
-              style: const TextStyle(fontSize: 12, color: AppColors.body),
-            ),
-          ],
+          ),
+          TextSpan(text: ' $label'),
+        ],
+      ),
+      style: const TextStyle(fontSize: 12.5, color: AppColors.body),
+    );
+    final category = _categoryForResults(bestShots);
+    void viewFiles() => Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ScannedFilesPage(
+          scan: scan,
+          loadPreview: _folderScanner.loadPreview,
         ),
       ),
     );
@@ -3911,15 +4052,56 @@ class _LibraryPageState extends State<LibraryPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // 1. The headline: what was found, and what to do next.
-          Text(
-            headline,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: _ink,
-            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    headline,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: _ink,
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: PopupMenuButton<String>(
+                  tooltip: 'More',
+                  padding: EdgeInsets.zero,
+                  onSelected: (value) {
+                    if (value == 'files') {
+                      viewFiles();
+                    } else {
+                      _showScanDetails(
+                        scan,
+                        bestShots: bestShots,
+                        groupLabel: groupLabel,
+                      );
+                    }
+                  },
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'files',
+                      child: Text(
+                        'View scanned files (${scan.imagesScanned} of ${scan.imageFilesFound})',
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'details',
+                      child: Text('About this scan'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             status,
             style: const TextStyle(
@@ -3928,25 +4110,46 @@ class _LibraryPageState extends State<LibraryPage> {
               color: AppColors.body,
             ),
           ),
+          // What was scanned and with which settings, as plain text.
+          const SizedBox(height: 8),
+          Text(
+            '${scan.folderName} · ${shortRange(scan.rangeDescription)}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: _ink,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${scan.imagesScanned} of ${scan.imageFilesFound} photos scanned',
+            style: const TextStyle(fontSize: 12, color: AppColors.body),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            settingsSummary(category, _resultsScanSettings ?? _settings),
+            style: const TextStyle(fontSize: 12, color: AppColors.body),
+          ),
           // 2. The headline numbers.
           if (groups > 0) ...[
-            const SizedBox(height: 14),
-            Row(
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 16,
+              runSpacing: 4,
               children: _moments
                   ? [
-                      tile('${_momentEventCount(scan)}', 'events'),
-                      const SizedBox(width: 8),
-                      tile('$groups', 'moments'),
-                      const SizedBox(width: 8),
-                      tile(
+                      stat('${_momentEventCount(scan)}', 'events'),
+                      stat('$groups', 'moments'),
+                      stat(
                         '${scan.duplicateGroups.fold<int>(0, (total, group) => total + _momentPair(group).length)}',
                         'photos picked',
                       ),
                     ]
                   : [
-                      tile(_formatBytes(potentialBytes), 'can be freed'),
-                      const SizedBox(width: 8),
-                      tile('${potential.length}', 'photos to remove'),
+                      stat(_formatBytes(potentialBytes), 'can be freed'),
+                      stat('${potential.length}', 'photos to remove'),
                     ],
             ),
           ],
@@ -4023,61 +4226,31 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// What was scanned (folder and dates), shown right above the results it
-  /// produced, with the scan's menu.
+  SettingsCategory _categoryForResults(bool bestShots) => _moments && bestShots
+      ? SettingsCategory.bestMoments
+      : bestShots
+      ? SettingsCategory.bestShot
+      : SettingsCategory.duplicates;
+
+  /// The collapsible "Change Filter" panel above the results. What was
+  /// scanned is in the "found" section below it.
   Widget _scopeStrip(
     FolderScanResult scan, {
     required bool bestShots,
     required String groupLabel,
-  }) {
-    final category = _moments && bestShots
-        ? SettingsCategory.bestMoments
-        : bestShots
-        ? SettingsCategory.bestShot
-        : SettingsCategory.duplicates;
-    void viewFiles() => Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ScannedFilesPage(
-          scan: scan,
-          loadPreview: _folderScanner.loadPreview,
-        ),
-      ),
-    );
-    return ScanScopeCard(
-      margin: const EdgeInsets.only(bottom: 10),
-      folder: scan.folderName,
-      range: scan.rangeDescription,
-      counts:
-          '${scan.imagesScanned} photos scanned · ${scan.duplicateGroups.length} $groupLabel',
-      scannedLine: '${scan.imagesScanned} of ${scan.imageFilesFound} photos',
-      category: category,
-      settings: _settings,
-      scannedWith: _resultsScanSettings ?? _settings,
-      onChanged: _updateSettings,
-      onFindAgain: () => _openPhotoConfiguration(_resultsMode),
-      onViewFiles: viewFiles,
-      menu: PopupMenuButton<String>(
-        tooltip: 'More',
-        padding: EdgeInsets.zero,
-        onSelected: (value) {
-          if (value == 'files') {
-            viewFiles();
-          } else {
-            _showScanDetails(scan, bestShots: bestShots, groupLabel: groupLabel);
-          }
-        },
-        itemBuilder: (_) => [
-          PopupMenuItem(
-            value: 'files',
-            child: Text(
-              'View scanned files (${scan.imagesScanned} of ${scan.imageFilesFound})',
-            ),
-          ),
-          const PopupMenuItem(value: 'details', child: Text('About this scan')),
-        ],
-      ),
-    );
-  }
+  }) => ScanScopeCard(
+    margin: const EdgeInsets.only(bottom: 10),
+    showScanDetails: false,
+    folder: scan.folderName,
+    range: scan.rangeDescription,
+    counts:
+        '${scan.imagesScanned} photos scanned · ${scan.duplicateGroups.length} $groupLabel',
+    category: _categoryForResults(bestShots),
+    settings: _settings,
+    scannedWith: _resultsScanSettings ?? _settings,
+    onChanged: _updateSettings,
+    onFindAgain: () => _openPhotoConfiguration(_resultsMode),
+  );
 
   Future<void> _showScanDetails(
     FolderScanResult scan, {
@@ -4264,6 +4437,10 @@ class _LibraryPageState extends State<LibraryPage> {
                 title: item.relativePath,
                 preview: item.previewBytes,
                 loadLarge: () => _folderScanner.loadLargePreview(item.uri),
+                details: explainPhoto(item),
+                isPrivate: _privatePhotos.contains(item.uri),
+                onPrivateChanged: (value) =>
+                    _privatePhotos.setPrivate(item.uri, value),
               ),
           ],
         ),

@@ -9,11 +9,74 @@ class ViewerPhoto {
     required this.title,
     required this.preview,
     required this.loadLarge,
+    this.details = const [],
+    this.isPrivate = false,
+    this.onPrivateChanged,
   });
+
+  /// True when the person marked this photo private: it is never shared or
+  /// put in a reel.
+  final bool isPrivate;
+
+  /// Called when the person marks or unmarks the photo as private. When null
+  /// the viewer has no private button.
+  final ValueChanged<bool>? onPrivateChanged;
 
   final String title;
   final Uint8List? preview;
   final Future<Uint8List?> Function() loadLarge;
+
+  /// Facts about how this photo was judged. When not empty, the viewer shows
+  /// an info button that opens them as "Why is this here?".
+  final List<String> details;
+}
+
+/// Opens the "Why is this here?" panel with [details].
+Future<void> showPhotoDetails(
+  BuildContext context,
+  String title,
+  List<String> details,
+) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(sheetContext).size.height * 0.7,
+        ),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          shrinkWrap: true,
+          children: [
+            const Text(
+              'Why is this here?',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            for (final line in details)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(line, style: const TextStyle(fontSize: 14)),
+              ),
+            const SizedBox(height: 4),
+            const Text(
+              'All of this was worked out on your phone. Nothing was sent anywhere.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 /// Full-screen viewer. Swipe left or right for the next or previous photo;
@@ -39,6 +102,9 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
   );
   late int _index = widget.initialIndex;
   final ValueNotifier<bool> _zoomed = ValueNotifier<bool>(false);
+  late final List<bool> _private = [
+    for (final photo in widget.photos) photo.isPrivate,
+  ];
 
   @override
   void dispose() {
@@ -63,6 +129,32 @@ class _PhotoViewerPageState extends State<PhotoViewerPage> {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 14),
         ),
+        actions: [
+          if (photos[_index].onPrivateChanged != null)
+            IconButton(
+              icon: Icon(
+                _private[_index] ? Icons.lock : Icons.lock_open_outlined,
+              ),
+              tooltip: _private[_index]
+                  ? 'Private: never shared. Tap to undo'
+                  : 'Mark as private (never shared)',
+              onPressed: () {
+                final value = !_private[_index];
+                setState(() => _private[_index] = value);
+                photos[_index].onPrivateChanged?.call(value);
+              },
+            ),
+          if (photos[_index].details.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.info_outline),
+              tooltip: 'Why is this here?',
+              onPressed: () => showPhotoDetails(
+                context,
+                photos[_index].title,
+                photos[_index].details,
+              ),
+            ),
+        ],
       ),
       body: ValueListenableBuilder<bool>(
         valueListenable: _zoomed,

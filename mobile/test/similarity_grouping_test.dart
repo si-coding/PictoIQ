@@ -1142,6 +1142,79 @@ void main() {
       );
     });
 
+    test('people who swapped places 60 seconds apart stay one moment', () {
+      List<double> colours(double first) => [
+        first,
+        1 - first,
+        for (var i = 2; i < colorHistogramBins; i++) 0,
+      ];
+      SimilarityCandidate shot(String name, int hash, int source, double c) =>
+          SimilarityCandidate(
+            visualHash: hash,
+            capturedAt: source == CaptureSource.unknown
+                ? 0
+                : _t0 + (name == 'a' ? 0 : 60000),
+            captureSource: source,
+            tieBreaker: name,
+            colorHistogram: colours(1),
+            colorLayout: List<double>.filled(12, 0.5),
+            faceCount: 4,
+            personColors: [colours(c)],
+          );
+      // Clothing colours differ by about 0.32: past the normal limit, inside
+      // the slack for photos taken within minutes.
+      final timed = [
+        shot('a', 0, CaptureSource.exif, 1),
+        shot('b', _bits(10), CaptureSource.exif, 0.46),
+      ];
+      expect(
+        _names(
+          timed,
+          clusterSimilar(timed, thresholds: SimilarityThresholds.moments()),
+        ),
+        [
+          ['a', 'b'],
+        ],
+      );
+      final untimed = [
+        shot('a', 0, CaptureSource.unknown, 1),
+        shot('b', _bits(10), CaptureSource.unknown, 0.46),
+      ];
+      expect(
+        clusterSimilar(untimed, thresholds: SimilarityThresholds.moments()),
+        isEmpty,
+      );
+    });
+
+    test('a few shots linked to a few of a big moment stay in it', () {
+      SimilarityCandidate shot(String name, int hash) => SimilarityCandidate(
+        visualHash: hash,
+        capturedAt: 0,
+        captureSource: CaptureSource.unknown,
+        tieBreaker: name,
+        colorHistogram: [1, for (var i = 1; i < colorHistogramBins; i++) 0],
+        colorLayout: List<double>.filled(12, 0.5),
+      );
+      int bitsIn(Iterable<int> positions) =>
+          positions.fold(0, (value, bit) => value | (1 << bit));
+      final far = bitsIn([for (var i = 14; i <= 25; i++) i]);
+      final near = bitsIn([0, 1, 2, for (var i = 14; i <= 25; i++) i]);
+      final outsider = bitsIn([for (var i = 0; i <= 13; i++) i]);
+      // 10 alike shots and 3 close to the outsider; the outsider is alike only
+      // those 3 (3 of 13 is below the usual share).
+      final shots = [
+        for (var i = 0; i < 10; i++) shot('f$i', far),
+        for (var i = 0; i < 3; i++) shot('n$i', near),
+        shot('o', outsider),
+      ];
+      final clusters = clusterSimilar(
+        shots,
+        thresholds: SimilarityThresholds.moments(),
+      );
+      expect(clusters, hasLength(1));
+      expect(clusters.single.members, hasLength(14));
+    });
+
     test('moments keep groups looser than best shots', () {
       expect(
         SimilarityThresholds.moments().splitShare,

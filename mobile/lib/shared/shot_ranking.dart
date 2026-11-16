@@ -138,6 +138,53 @@ ImageSignals measureImage(img.Image image) {
   );
 }
 
+/// Sharpness (Laplacian variance) of the pixels of an RGBA bitmap between
+/// [left], [top] and [right], [bottom]. Only meaningful when compared with
+/// values measured on bitmaps of the same size. [step] samples every few
+/// pixels, to keep large regions cheap. Null when the region is too small.
+double? regionSharpness(
+  Uint8List rgba,
+  int width,
+  int height,
+  int left,
+  int top,
+  int right,
+  int bottom, {
+  int step = 1,
+}) {
+  final x0 = math.max(1, left);
+  final y0 = math.max(1, top);
+  final x1 = math.min(width - 1, right);
+  final y1 = math.min(height - 1, bottom);
+  if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+  if (rgba.length < width * height * 4) return null;
+  final stride = math.max(1, step);
+  double luma(int x, int y) {
+    final i = (y * width + x) * 4;
+    return 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
+  }
+
+  var sum = 0.0;
+  var squares = 0.0;
+  var samples = 0;
+  for (var y = y0; y < y1; y += stride) {
+    for (var x = x0; x < x1; x += stride) {
+      final laplacian =
+          luma(x, y - 1) +
+          luma(x, y + 1) +
+          luma(x - 1, y) +
+          luma(x + 1, y) -
+          4 * luma(x, y);
+      sum += laplacian;
+      squares += laplacian * laplacian;
+      samples++;
+    }
+  }
+  if (samples == 0) return null;
+  final mean = sum / samples;
+  return math.max(0.0, squares / samples - mean * mean);
+}
+
 /// What face detection found in one photo.
 class FaceSignals {
   const FaceSignals({
@@ -149,6 +196,8 @@ class FaceSignals {
     this.subjectColors,
     this.personColors,
     this.largestFaceArea,
+    this.faceSharpness,
+    this.frameSharpness,
   });
 
   static const none = FaceSignals(
@@ -186,6 +235,32 @@ class FaceSignals {
   /// Area of the largest face as a share of the whole picture (0-1). Null when
   /// not measured.
   final double? largestFaceArea;
+
+  /// Sharpness of the pixels inside the largest face, measured at the working
+  /// size of the face detector. Compare it only with the same measure on
+  /// other photos or with [frameSharpness]. Null when not measured.
+  final double? faceSharpness;
+
+  /// Sharpness of the whole picture measured the same way as [faceSharpness],
+  /// so the two can be compared. Null when not measured.
+  final double? frameSharpness;
+
+  /// True when a person is clearly the subject but their face is soft: soft
+  /// in absolute terms, or much softer than a picture that is otherwise in
+  /// focus (the camera focused on the background). Small, distant faces are
+  /// not judged, because a face of a few pixels is always soft.
+  bool isUnclearSubject({
+    double minSharpness = 3,
+    double ratio = 0.08,
+    double minFrameSharpness = 60,
+  }) {
+    if (!hasProminentFace) return false;
+    final face = faceSharpness;
+    if (face == null) return false;
+    if (face < minSharpness) return true;
+    final frame = frameSharpness;
+    return frame != null && frame >= minFrameSharpness && face < frame * ratio;
+  }
 
   /// A face big enough that the photo is probably about a person. A tiny
   /// face in the distance (a presenter far across a hall) does not count.
@@ -362,11 +437,16 @@ const _crushedShare = 0.5;
 const _maxFinalists = 3;
 const _finalistWindow = 15;
 
-// Score weights. They add up to 100 when faces are used, 70 when not.
+// A face this much softer than the sharpest face in the group is out of focus.
+const _faceBlurRatio = 0.35;
+
+// Score weights. They add up to 100 when faces are used, 70 when not, and a
+// further 15 when the sharpness of the faces themselves can be compared.
 const _sharpnessWeight = 40.0;
 const _exposureWeight = 20.0;
 const _resolutionWeight = 10.0;
 const _faceWeight = 30.0;
+const _faceFocusWeight = 15.0;
 
 /// Ranks photos of the same scene and explains why.
 ///
@@ -396,11 +476,35 @@ GroupRanking rankShots(List<ShotInput> inputs) {
       ? inputs.map((i) => i.features.faces!.count).reduce(math.min)
       : 0;
   final useFaces = allAssessed && maxFaces > 0;
+  // Face focus counts only when two or more photos show a face and every one
+  // of them had its face measured, so the comparison is fair. The sharpest
+  // face in the group is the reference, as with whole-picture sharpness.
+  final facePhotos = useFaces
+      ? [
+          for (final input in inputs)
+            if (input.features.faces!.count > 0) input,
+        ]
+      : <ShotInput>[];
+  final useFaceFocus =
+      facePhotos.length > 1 &&
+      facePhotos.every((input) => input.features.faces!.faceSharpness != null);
+  final maxFaceSharpness = useFaceFocus
+      ? facePhotos
+            .map((input) => input.features.faces!.faceSharpness!)
+            .reduce(math.max)
+      : 0.0;
+  double faceFocusRatio(FaceSignals faces) {
+    final sharpness = faces.faceSharpness;
+    if (sharpness == null || maxFaceSharpness <= 0) return 1.0;
+    return (sharpness / maxFaceSharpness).clamp(0.0, 1.0).toDouble();
+  }
+
   final possible =
       _sharpnessWeight +
       _exposureWeight +
       _resolutionWeight +
-      (useFaces ? _faceWeight : 0);
+      (useFaces ? _faceWeight : 0) +
+      (useFaceFocus ? _faceFocusWeight : 0);
 
   final scored = <({ShotInput input, double points})>[];
   for (final input in inputs) {
@@ -422,6 +526,9 @@ GroupRanking rankShots(List<ShotInput> inputs) {
         final smile = faces.smileAverage ?? 0.5;
         final presence = faces.count / maxFaces;
         points += _faceWeight * (0.55 * eyes + 0.25 * smile + 0.20 * presence);
+        if (useFaceFocus) {
+          points += _faceFocusWeight * math.sqrt(faceFocusRatio(faces));
+        }
       }
     }
     scored.add((input: input, points: points));
@@ -493,6 +600,16 @@ GroupRanking rankShots(List<ShotInput> inputs) {
             faces.count == 1 ? 'Eyes look open' : 'Everyone’s eyes look open',
           );
         }
+        if (useFaceFocus) {
+          final focus = faceFocusRatio(faces);
+          if (focus >= 0.995) {
+            strengths.add('Face is the sharpest in the group');
+          } else if (focus < 0.7) {
+            concerns.add(
+              'Face is softer: ${(focus * 100).round()}% as sharp as the best face',
+            );
+          }
+        }
         final smile = faces.smileAverage;
         if (smile != null && smile >= 0.55) {
           strengths.add(faces.count == 1 ? 'Smiling' : 'Mostly smiling');
@@ -518,6 +635,9 @@ GroupRanking rankShots(List<ShotInput> inputs) {
       final eyes = faceInfo.eyesOpenMin;
       if (eyes != null && eyes < _closedEyes) faults.add('eyes closed');
       if (faceInfo.edgeCutoff) faults.add('a face is cut off at the edge');
+      if (useFaceFocus && faceFocusRatio(faceInfo) < _faceBlurRatio) {
+        faults.add('the face is out of focus');
+      }
       final away = faceInfo.lookingAwayMax;
       if (away != null && away > _lookingAwayDegrees) {
         faults.add('someone is looking away');

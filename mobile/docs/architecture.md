@@ -86,3 +86,100 @@ After a scan, results that were found open directly with no pop-up; only "nothin
 ## Photo reels
 
 `features/videos/export/reel_configuration_page.dart` is the editor (title, title style, audio, drag to reorder; the whole page scrolls and the photo grid auto-scrolls while dragging). `core/video/video_reel_service.dart` talks to Android over the `com.pictoiq.app/video_reel` channels; `PhotoReelEncoder.kt` draws each frame (1080x1920, 30 fps, H.264), re-encodes the chosen audio to AAC, trims it to the reel length and muxes both into one MP4. Old reels are deleted from the cache before a new one is made.
+
+## People-first Best Moments and Best Shots
+
+Best Moments (the best shot of each event) and Best Shots (the best of several
+similar clicks) are the core of the app, so the ranking is built around the
+person in the photo and asks nothing extra of the user.
+
+- **Face focus** (`shared/shot_ranking.dart`): when two or more photos in a
+  group show a face, the sharpness of the largest face itself is compared
+  (`regionSharpness`, measured in the scanner next to face detection). A face
+  far softer than the best face is a fault ("the face is out of focus"), so a
+  crisp background can no longer carry a blurry person. Without face
+  measurements the ranking is exactly as before.
+- **Unclear people photos** (`clutter_classifier.dart`): a new clutter kind for
+  a clear, prominent face that is soft in absolute terms, or much softer than
+  a picture that is otherwise in focus. Tiny distant faces are not judged. The
+  thresholds are `ClutterThresholds.unclear*` and need tuning on real photos
+  with the "Why is this here?" panel.
+- **People only filter** (`ContentFilter.peopleOnly`, `isAboutPeople`): a clear
+  face, or a confident people label at least as strong as any object label.
+  Scenery alone does not count. Unknown (labeller failed) is kept.
+- **Favourites** (`FolderScanPhoto.isFavorite`, from the gallery's own star):
+  always kept in a group (`_decisionFor` in `main.dart`), never listed as
+  clutter. If a favourite was not the ranked pick, the group needs review and
+  is skipped by bulk cleanup.
+- **Why is this here?** (`library/photo_explain.dart`): an info button in the
+  photo viewer and the clutter preview lists what the face detector and the
+  labeller saw (faces, face sharpness, labels and confidences) and the ranking
+  notes. Computed on the phone, nothing is sent anywhere.
+
+### One set of photo filters for every tool
+
+Best Moments, Best Shots and Duplicate photos share the same two choices
+(`sharedPhotoSettings` in `features/settings/category_settings.dart`):
+
+- **Which photos to include**: People and Scenery chips that can be switched on
+  together (`ContentFilter.fromChoice`). Both on is the default
+  (`peopleAndScenery`); neither on means every photo. `peopleOnly` and
+  `sceneryOnly` use the same on-device labeller; a photo whose main person is
+  out of focus is also left out whenever people are wanted.
+- **Documents and screenshots of pages**: unchanged.
+
+Best Moments hides moments with no people unless Scenery is on
+(`ContentFilter.includesScenery`); the old "Show moments with no people" switch
+is gone (the stored `momentShowScenes` value is still honoured).
+
+### Results page layout
+
+The "N moments found" section holds the ⋮ menu (view scanned files, about this
+scan) and the scan's facts as plain text (folder and dates, photos scanned, the
+settings used). Below it, "Change Filter" is a single collapsible panel
+(`ScanScopeCard(showScanDetails: false)`). When new results appear, the page
+glides down to the first photos (`_scrollToResults`).
+
+### Home storage figure
+
+The Home header shows free space next to Photos, Videos and Albums. It comes
+from `DeviceStorage` (`core/device/device_storage.dart`), a method channel
+answered by `StatFs` in `MainActivity.kt`. No permission is needed and nothing
+leaves the phone.
+
+### Bottom bar and scrolling
+
+The bottom bar depends on the screen. On the results screen it is just Share and
+Create reel, in colour (the top bar has Home), and there is no separate
+"Share your memories" card on the page. On the home screen it is Photos, Videos (when
+enabled), Settings and Privacy. While a reel is made, Cancel reel sits under
+the progress bar, as Cancel scan does under the scan progress. Settings and
+Privacy are also in the ⋮ menu. Scans analyse several photos at once
+(`defaultScanConcurrency`: 3 to 6 by CPU cores). Long result lists have a draggable scroll bar
+and a back-to-top button (`_withScrollAids` in `main.dart`).
+
+### Sensitive pictures are never shared
+
+Before anything is shared or put in a reel (`_screenForSharing` in `main.dart`),
+`screenForSharing` (`features/photos/share/share_guard.dart`) removes photos the
+person marked private (the lock button in the photo viewer, stored on the phone
+by `PrivatePhotoStore`) and photos a `SensitiveContentDetector` scores at or
+above `sensitiveThreshold`. The person is warned, can review those photos, and
+can carry on without them.
+
+Automatic detection needs its own model: ML Kit's default labeller has no
+nudity or underwear labels (its label map only has Swimwear, Skin, Trunk and
+Muscle), so the app currently uses `NoSensitiveDetector` and relies on photos
+marked private. A bundled on-device model implementing
+`SensitiveContentDetector` plugs in at `_sensitiveDetector` in `main.dart`.
+Illegal material cannot be recognised on the phone; the warning tells the
+person not to pass it on and to report it.
+
+### Same moment, people in different places
+
+For Best Moments, photos with a trusted camera time within 3 minutes get slack
+in two places (`similarity_grouping.dart`): the clothing-colour check allows
+1.6 times the usual difference (people swap places, or a balloon covers their
+clothes), and a photo that is alike at least 3 photos of a group stays in it
+even when that is under the usual share of a big group (`minLinks` in
+`_splitLooseChain`). Both limits are untuned; check them on real photos.

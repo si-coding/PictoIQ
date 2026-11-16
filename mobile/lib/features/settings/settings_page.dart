@@ -170,6 +170,10 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
         tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+        // Without these the opened section centres each control, so rows
+        // with short content drift away from the left edge.
+        expandedAlignment: Alignment.centerLeft,
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
         children: children,
       ),
     ),
