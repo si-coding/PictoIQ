@@ -14,19 +14,29 @@ PictoIQ ("the app") helps you find your best photos and moments, remove exact du
 ## What the app does with your photos
 
 - It creates small previews and numerical fingerprints (such as colour and sharpness measurements) to group similar photos and suggest the best one. These are kept in memory while the app is open and are not saved or sent anywhere.
-- It detects whether faces are present, whether eyes are open and whether people are smiling, using Google ML Kit's on-device face detection. When you choose "People and scenery only" in Settings, it also uses Google ML Kit's on-device image labelling to recognise broad things in a photo (for example a document, a screen, food, sky or a mountain) so those photos can be left out of the results. The labels are used during the scan and are not saved or sent anywhere. It does **not** identify who anyone is and does not compare people with each other beyond counting faces and comparing clothing colours inside the same scan.
+- It detects whether faces are present, whether eyes are open, whether people are smiling and how sharp each face is, using Google ML Kit's on-device face detection. By default ("People and scenery" in Settings) it also uses Google ML Kit's on-device image labelling to recognise broad things in a photo (for example a document, a screen, food, sky or a mountain) so photos that are not about people or scenery can be left out of the results. The labels and measurements are used during the scan and are not saved or sent anywhere. It does **not** identify who anyone is and does not compare people with each other beyond counting faces and comparing clothing colours inside the same scan.
+- It reads whether you marked a photo as a favourite in your gallery (read only), so favourites are protected from clean-up suggestions and are preferred when choosing the best photo.
+- It reads how much free space your phone has, to show it on the home screen. This needs no permission and is not saved or sent anywhere.
 - Clutter finds screenshots, documents, blank or dark, blurry and tiny photos using the same on-device measurements.
 - PictoIQ does not request access to your videos. It deletes a photo **only** after you confirm in the app, and Android may ask you to confirm again. Deleted photos are removed from your phone's photo library or from the folder you chose.
 
 ## Photo reels and audio
 
-- A reel is a short video made on your phone from photos you selected. PictoIQ builds it on the device with Android's own video encoder and opens Android's share sheet; nothing is uploaded by PictoIQ. Before sharing photos, the app shows them on a preview screen where you can remove any you do not want to send. What happens next depends on the app you share it to.
+- A reel is a short video made on your phone from photos you selected. PictoIQ builds it on the device with Android's own video encoder and opens Android's share sheet; nothing is uploaded by PictoIQ. Before sharing photos, the app shows them on a preview screen where you can remove any you do not want to send, and put them in the order you want. PictoIQ shares or puts at most 9 photos in a reel at a time. What happens next depends on the app you share it to.
 - If you add music, you choose an audio file with Android's file picker. PictoIQ copies it to its private cache for the length of the job and removes it afterwards. PictoIQ does not use the microphone and does not ask for audio permissions.
 - The finished reel and the copies of the photos made for sharing are kept in the app's temporary cache and replaced the next time you make one. Clearing the app's storage in Android settings removes them.
 
+## Private photos
+
+You can mark a photo as private in the photo viewer. PictoIQ never shares a private photo or puts it in a reel, and warns you if one is included. The app remembers which photos you marked (by their location on your phone, not the photo itself) in a small file on your device. It is not sent anywhere. PictoIQ does not promise to detect sensitive or inappropriate photos by itself, so check what you share.
+
+## Scan size
+
+One scan looks at up to 500 photos (the newest ones in the album and date range you choose).
+
 ## Information stored on your device
 
-The app saves your settings (for example the match level you picked, or whether Best shot keeps one photo or several) on your device. Nothing else is saved between scans.
+The app saves your settings (for example the match level you picked, or whether Best shot keeps one photo or several) and your list of private photos on your device. Nothing else is saved between scans. Clearing the app's storage in Android settings removes them.
 
 ## Information sent to Google by ML Kit
 

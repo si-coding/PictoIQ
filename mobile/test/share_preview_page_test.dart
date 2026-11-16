@@ -76,4 +76,49 @@ void main() {
     expect(popped, isTrue);
     expect(result, isNull);
   });
+
+  testWidgets('more than the limit shows a warning and only the top are sent',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    List<FolderScanPhoto>? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async => result = await Navigator.of(context)
+                .push<List<FolderScanPhoto>>(
+                  MaterialPageRoute(
+                    builder: (_) => SharePreviewPage(
+                      photos: [for (var i = 0; i < 12; i++) _photo('p$i')],
+                      noun: 'best moments',
+                      maxPhotos: 9,
+                    ),
+                  ),
+                ),
+            child: const Text('open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('allows only 9 best moments'),
+      findsOneWidget,
+    );
+    expect(find.text('Share 9 photos'), findsOneWidget);
+    expect(find.text('Not included'), findsNWidgets(3));
+
+    for (var i = 0; i < 3; i++) {
+      await tester.tap(find.byTooltip('Do not share this photo').last);
+      await tester.pump();
+    }
+    expect(find.textContaining('allows only'), findsNothing);
+    expect(find.text('Not included'), findsNothing);
+    await tester.tap(find.text('Share 9 photos'));
+    await tester.pumpAndSettle();
+    expect(result, hasLength(9));
+  });
 }

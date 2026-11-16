@@ -48,7 +48,6 @@ class AppSettings {
     this.clutterOff = const {},
     this.clutterBlur = ClutterBlur.balanced,
     this.videoKeep = VideoKeep.oldest,
-    this.reelMaxPhotos = 15,
     this.reelSecondsPerPhoto = 3,
     this.reelTransitionMillis = 400,
     this.reelTitleStyle = ReelTitleStyle.clean,
@@ -125,9 +124,6 @@ class AppSettings {
   /// Exact duplicate videos: which video of a set is kept by default.
   final VideoKeep videoKeep;
 
-  /// Maximum photos included by default when opening the reel editor.
-  final int reelMaxPhotos;
-
   /// How long each photo remains in the generated reel.
   final int reelSecondsPerPhoto;
 
@@ -159,7 +155,6 @@ class AppSettings {
     Set<ClutterKind>? clutterOff,
     ClutterBlur? clutterBlur,
     VideoKeep? videoKeep,
-    int? reelMaxPhotos,
     int? reelSecondsPerPhoto,
     int? reelTransitionMillis,
     ReelTitleStyle? reelTitleStyle,
@@ -185,7 +180,6 @@ class AppSettings {
     clutterOff: clutterOff ?? this.clutterOff,
     clutterBlur: clutterBlur ?? this.clutterBlur,
     videoKeep: videoKeep ?? this.videoKeep,
-    reelMaxPhotos: reelMaxPhotos ?? this.reelMaxPhotos,
     reelSecondsPerPhoto: reelSecondsPerPhoto ?? this.reelSecondsPerPhoto,
     reelTransitionMillis: reelTransitionMillis ?? this.reelTransitionMillis,
     reelTitleStyle: reelTitleStyle ?? this.reelTitleStyle,
@@ -213,7 +207,6 @@ class AppSettings {
     'clutterOff': [for (final kind in clutterOff) kind.name]..sort(),
     'clutterBlur': clutterBlur.name,
     'videoKeep': videoKeep.name,
-    'reelMaxPhotos': reelMaxPhotos,
     'reelSecondsPerPhoto': reelSecondsPerPhoto,
     'reelTransitionMillis': reelTransitionMillis,
     'reelTitleStyle': reelTitleStyle.name,
@@ -243,7 +236,6 @@ class AppSettings {
     final off = json['clutterOff'];
     final blur = json['clutterBlur'];
     final keep = json['videoKeep'];
-    final reelPhotos = json['reelMaxPhotos'];
     final reelSeconds = json['reelSecondsPerPhoto'];
     final reelTransition = json['reelTransitionMillis'];
     final reelStyle = json['reelTitleStyle'];
@@ -318,9 +310,6 @@ class AppSettings {
         (value) => value.name == keep,
         orElse: () => defaults.videoKeep,
       ),
-      reelMaxPhotos: reelPhotos is int && reelPhotos >= 1 && reelPhotos <= 30
-          ? reelPhotos
-          : defaults.reelMaxPhotos,
       reelSecondsPerPhoto:
           reelSeconds is int && reelSeconds >= 2 && reelSeconds <= 6
           ? reelSeconds
@@ -362,7 +351,6 @@ class AppSettings {
       other.clutterOff.containsAll(clutterOff) &&
       other.clutterBlur == clutterBlur &&
       other.videoKeep == videoKeep &&
-      other.reelMaxPhotos == reelMaxPhotos &&
       other.reelSecondsPerPhoto == reelSecondsPerPhoto &&
       other.reelTransitionMillis == reelTransitionMillis &&
       other.reelTitleStyle == reelTitleStyle;
@@ -390,7 +378,6 @@ class AppSettings {
     Object.hashAll([for (final kind in clutterOff) kind.index]..sort()),
     clutterBlur,
     videoKeep,
-    reelMaxPhotos,
     reelSecondsPerPhoto,
     reelTransitionMillis,
     reelTitleStyle,

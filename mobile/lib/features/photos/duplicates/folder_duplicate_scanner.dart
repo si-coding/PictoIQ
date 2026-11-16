@@ -27,6 +27,7 @@ import 'package:photo_manager/photo_manager.dart'
         ThumbnailSize;
 import 'package:saf/saf.dart';
 
+import 'package:pictoiq_mobile/core/config/app_limits.dart';
 import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/core/media/image_processing.dart';
 import 'package:pictoiq_mobile/shared/photo_content.dart';
@@ -327,6 +328,7 @@ class FolderScanResult {
     this.imagesSkipped = 0,
     this.imageFilesFound = 0,
     this.imagesOutsideDateRange = 0,
+    this.imagesOverLimit = 0,
     this.scannedPhotos = const [],
     this.skippedNames = const [],
     this.documentsLeftOut = 0,
@@ -378,6 +380,10 @@ class FolderScanResult {
   /// Image files left out because they are older than the chosen date range.
   final int imagesOutsideDateRange;
 
+  /// Photos not scanned because the folder had more than the most one scan
+  /// looks at (see `AppLimits.scanMaxPhotos`); the newest are scanned.
+  final int imagesOverLimit;
+
   /// Every photo that was read and analysed, grouped or not, so the user can
   /// check what the scan actually looked at.
   final List<FolderScanPhoto> scannedPhotos;
@@ -412,6 +418,7 @@ class FolderScanResult {
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
+      imagesOverLimit: imagesOverLimit,
       scannedPhotos: List.unmodifiable([
         for (final photo in scannedPhotos)
           if (!removed.contains(photo.uri)) photo,
@@ -446,6 +453,7 @@ class FolderScanResult {
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
+      imagesOverLimit: imagesOverLimit,
       scannedPhotos: scannedPhotos,
       skippedNames: skippedNames,
       documentsLeftOut: documentsLeftOut,
@@ -473,6 +481,7 @@ class FolderScanResult {
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
+      imagesOverLimit: imagesOverLimit,
       scannedPhotos: scannedPhotos,
       skippedNames: skippedNames,
       documentsLeftOut: documentsLeftOut,
@@ -497,6 +506,7 @@ class FolderScanResult {
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
+      imagesOverLimit: imagesOverLimit,
       scannedPhotos: scannedPhotos,
       skippedNames: skippedNames,
       documentsLeftOut: documentsLeftOut,
@@ -520,6 +530,7 @@ class FolderScanResult {
     imagesSkipped: imagesSkipped,
     imageFilesFound: imageFilesFound,
     imagesOutsideDateRange: imagesOutsideDateRange,
+    imagesOverLimit: imagesOverLimit,
     scannedPhotos: scannedPhotos,
     skippedNames: skippedNames,
     documentsLeftOut: documentsLeftOut,
@@ -885,6 +896,7 @@ class FolderDuplicateScanner {
     DateTime? rangeFrom,
     DateTime? rangeTo,
     int? concurrency,
+    int maxPhotos = AppLimits.scanMaxPhotos,
     void Function(int found, int checked)? onListed,
     void Function(int total)? onTotal,
     void Function(int imagesScanned)? onProgress,
@@ -895,6 +907,7 @@ class FolderDuplicateScanner {
     var imagesSkipped = 0;
     var imageFilesFound = 0;
     var imagesOutsideDateRange = 0;
+    var imagesOverLimit = 0;
     final skippedNames = <String>[];
     Object? firstError;
     final now = DateTime.now();
@@ -975,6 +988,18 @@ class FolderDuplicateScanner {
         lastModified: file.lastModified,
         isFavorite: file.isFavorite,
       ));
+    }
+    // One scan looks at a limited number of photos: the newest.
+    final limited = newestWithinLimit(
+      pending,
+      (file) => file.lastModified,
+      maxPhotos,
+    );
+    imagesOverLimit = pending.length - limited.length;
+    if (imagesOverLimit > 0) {
+      pending
+        ..clear()
+        ..addAll(limited);
     }
     onListed?.call(pending.length, checked);
     onTotal?.call(pending.length);
@@ -1185,6 +1210,7 @@ class FolderDuplicateScanner {
       imagesSkipped: imagesSkipped,
       imageFilesFound: imageFilesFound,
       imagesOutsideDateRange: imagesOutsideDateRange,
+      imagesOverLimit: imagesOverLimit,
       scannedPhotos: List.unmodifiable(images),
       skippedNames: List.unmodifiable(skippedNames),
       documentsLeftOut: !bestShotsScan
@@ -1664,4 +1690,16 @@ FolderDuplicateGroup rankedGroup(
 int defaultScanConcurrency([int? cores]) {
   final count = cores ?? Platform.numberOfProcessors;
   return (count ~/ 2 + 1).clamp(3, 6).toInt();
+}
+
+/// The [max] items with the latest [modified] time (items with no time, 0,
+/// last). All of [items], in their order, when there are no more than [max].
+List<T> newestWithinLimit<T>(
+  List<T> items,
+  int Function(T item) modified,
+  int max,
+) {
+  if (items.length <= max) return items;
+  final sorted = [...items]..sort((a, b) => modified(b).compareTo(modified(a)));
+  return sorted.take(max).toList();
 }

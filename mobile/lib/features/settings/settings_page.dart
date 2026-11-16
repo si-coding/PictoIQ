@@ -83,17 +83,8 @@ class _SettingsPageState extends State<SettingsPage> {
           _section(
             title: 'Reel',
             icon: Icons.movie_creation_outlined,
-            note: 'Default photo count, timing and title style for new reels.',
+            note: 'Timing and title style for new reels.',
             children: [
-              settingsChoice<int>(
-                title: 'Maximum photos in a reel',
-                values: const [5, 10, 15, 20, 30],
-                selected: _settings.reelMaxPhotos,
-                label: (count) => '$count',
-                onSelected: (count) =>
-                    _change(_settings.copyWith(reelMaxPhotos: count)),
-                note: 'Reels open with up to 15 photos by default.',
-              ),
               settingsChoice<int>(
                 title: 'Time per photo',
                 values: const [2, 3, 4, 5, 6],

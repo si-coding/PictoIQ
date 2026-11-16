@@ -12,18 +12,19 @@ Collect memories, not clutter. Find your best photos and share them.
 **Full description (max 4000):**
 Collect memories, not clutter. PictoIQ looks through an album you choose, finds your best photos and moments, and helps you share them with family and friends or clear out copies.
 
-- Best moments: groups photos into events and moments, then shows the best 1 to 3 of each, picked for quality and variety (not three near-identical shots). Select photos, preview them, remove any you do not want to send, and share to WhatsApp, Instagram or Facebook. Nothing is deleted. Choose how long a moment lasts, how many photos to show, and whether smiles or candid shots count more.
-- Photo reels: turn your selected best photos into a short vertical video reel with a title and your own music, built on your phone and ready to share.
-- Choose which photos to include: all photos, or people and scenery only (an on-device model leaves out documents, screens, food and objects).
-- Best shot suggestions: compares sharpness, exposure, resolution and faces (eyes open, smiles) and explains the pick. Keep a single best shot, or switch in Settings to keep several photos from each group.
-- Group by what is in the picture: same scene, same people, similar pose. Not by when a file was copied.
-- You stay in control: tap any photo to enlarge it, pick the one to keep, skip any group, or review one by one.
+- Best moments: finds the best shots of the same moment or event, picked for quality and variety (not three near-identical shots), with people first. Photos where a person is out of focus, or where the focus landed on something else, are not chosen. Choose how long a moment lasts, how many photos to show and whether smiles or candid shots count more.
+- Best shots: keeps the best of similar clicks and explains the pick. Faces in focus, open eyes and smiles count most, then sharpness, exposure and resolution.
+- One set of filters for both: include people, scenery or both, and decide what happens with documents and screenshots.
+- Share and reels: pick up to 9 best shots or moments, preview them, remove any you do not want to send and put them in the order you like. Share to WhatsApp, Instagram or Facebook, or turn them into a short vertical reel with a title and your own music, built on your phone.
+- Private photos: mark any photo as private and PictoIQ will never share it or put it in a reel, and warns you if one is included.
+- Favourites are protected: photos you starred in your gallery are never suggested for clean-up.
+- "Why is this here?": tap the info button on a photo to see how PictoIQ judged it.
 - Exact duplicates: finds identical photo copies and keeps the oldest.
-- Clutter: finds screenshots, documents, blank or dark, blurry and tiny photos so you can clear them out in one go.
-- Choose how strict the matching is, and limit a scan to a date range or custom dates.
+- Clutter: finds screenshots, documents, slides and objects, blank or dark, unclear people photos, blurry and tiny photos so you can clear them out in one go.
+- Scans look at up to 500 photos at a time (the newest in your chosen album and dates). The home screen shows how much storage is free.
 - Private by design: your photos are analysed on your phone and never uploaded. No account. No ads.
 
-In Best shot, Exact duplicates and Clutter, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
+PictoIQ cannot reliably detect sensitive pictures by itself, so do not claim that in the store listing. In Best shots, Exact duplicates and Clutter, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
 
 **Category:** Photography (or Tools). **Tags:** photo cleaner, duplicate photos, best shot.
 

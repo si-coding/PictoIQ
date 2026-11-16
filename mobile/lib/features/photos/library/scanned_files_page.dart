@@ -219,6 +219,8 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
       'Image files found: ${scan.imageFilesFound}',
       'Scanned: ${scan.imagesScanned}',
       'Left out by the date range: ${scan.imagesOutsideDateRange}',
+      if (scan.imagesOverLimit > 0)
+        'Not scanned (one scan looks at the newest photos only): ${scan.imagesOverLimit}',
       'Skipped (unreadable or unsupported): ${scan.imagesSkipped}',
     ];
     return AppScaffold(

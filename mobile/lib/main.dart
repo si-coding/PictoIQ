@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:pictoiq_mobile/shared/app_menu_button.dart';
 import 'package:pictoiq_mobile/core/config/app_colors.dart';
+import 'package:pictoiq_mobile/core/config/app_limits.dart';
 import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_page.dart';
@@ -675,13 +676,15 @@ class _LibraryPageState extends State<LibraryPage> {
         builder: (_) => SharePreviewPage(
           photos: chosen,
           title: _moments ? 'Share best moments' : 'Share best shots',
+          noun: _moments ? 'best moments' : 'best shots',
+          maxPhotos: AppLimits.shareMaxPhotos,
         ),
       ),
     );
     if (photos == null || photos.isEmpty || !mounted) return;
     final messenger = ScaffoldMessenger.of(context);
-    // Most apps handle a few dozen photos at a time at best.
-    final batch = photos.take(30).toList();
+    // Only the first few are shared at a time (see AppLimits).
+    final batch = photos.take(AppLimits.shareMaxPhotos).toList();
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(
@@ -699,15 +702,6 @@ class _LibraryPageState extends State<LibraryPage> {
       await SharePlus.instance.share(
         ShareParams(files: [for (final path in paths) XFile(path)]),
       );
-      if (photos.length > batch.length && mounted) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Shared the first ${batch.length} of ${photos.length} photos.',
-            ),
-          ),
-        );
-      }
     } catch (error) {
       debugPrint('Share failed: $error');
       messenger
@@ -727,13 +721,14 @@ class _LibraryPageState extends State<LibraryPage> {
     }
     final allowed = await _screenForSharing(picks, action: 'put in a reel');
     if (allowed == null || allowed.isEmpty || !mounted) return;
-    final photos = allowed.take(_settings.reelMaxPhotos).toList();
+    // The editor lists every photo and says which ones fit in the reel.
+    final photos = allowed;
 
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => ReelConfigurationPage(
           photos: photos,
-          maxPhotos: _settings.reelMaxPhotos,
+          maxPhotos: AppLimits.reelMaxPhotos,
           secondsPerPhoto: _settings.reelSecondsPerPhoto,
           transitionMillis: _settings.reelTransitionMillis,
           titleStyle: _settings.reelTitleStyle,
@@ -2490,8 +2485,8 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  /// Results footer: only Share and Create reel, in colour. Going home is the
-  /// home button in the top bar.
+  /// Results footer: only Share and Create reel, in the theme's forest green.
+  /// Going home is the home button in the top bar.
   Widget _resultsNavigationBar() {
     final scan = _bestShotsScan;
     final canShare =
@@ -2522,7 +2517,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   style: TextStyle(
                     color: shown,
                     fontSize: 13,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ],
@@ -2542,7 +2537,7 @@ class _LibraryPageState extends State<LibraryPage> {
             action(
               icon: Icons.ios_share_outlined,
               label: 'Share',
-              color: const Color(0xFF1E6FD9),
+              color: _green,
               onTap: canShare
                   ? () => unawaited(
                       _sharePhotos(_picksToShare(scan.duplicateGroups)),
@@ -2552,7 +2547,7 @@ class _LibraryPageState extends State<LibraryPage> {
             action(
               icon: Icons.movie_creation_outlined,
               label: _creatingReel ? 'Creating…' : 'Create reel',
-              color: const Color(0xFFD9467A),
+              color: _green,
               onTap: canShare ? () => unawaited(_createPhotoReel(scan)) : null,
             ),
           ],
@@ -4124,7 +4119,9 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
           const SizedBox(height: 2),
           Text(
-            '${scan.imagesScanned} of ${scan.imageFilesFound} photos scanned',
+            scan.imagesOverLimit > 0
+                ? '${scan.imagesScanned} of ${scan.imageFilesFound} photos scanned (the newest ${scan.imagesScanned + scan.imagesSkipped}; ${scan.imagesOverLimit} older not scanned)'
+                : '${scan.imagesScanned} of ${scan.imageFilesFound} photos scanned',
             style: const TextStyle(fontSize: 12, color: AppColors.body),
           ),
           const SizedBox(height: 2),

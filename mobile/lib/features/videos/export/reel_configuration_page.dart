@@ -181,7 +181,8 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
   Future<void> _createReel() async {
     if (_creating || _photos.isEmpty) return;
     final configuration = ReelConfiguration(
-      photos: List.unmodifiable(_photos),
+      // Only the top photos fit in the reel (see AppLimits.reelMaxPhotos).
+      photos: List.unmodifiable(_photos.take(widget.maxPhotos)),
       audioPath: _audioPath,
       title: _titleController.text.trim(),
       titleStyle: _titleStyle,
@@ -302,11 +303,43 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
                   ),
                 ),
               ),
+              if (_photos.length > widget.maxPhotos)
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  sliver: SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF4D6),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.info_outline, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'PictoIQ allows only ${widget.maxPhotos} photos '
+                              'in a reel at a time. The top ${widget.maxPhotos} '
+                              'are used. Remove photos you do not want, or '
+                              'drag the ones you want to the top.',
+                              style: const TextStyle(
+                                fontSize: 12.5,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
                 sliver: SliverToBoxAdapter(
                   child: Text(
-                    '${_photos.length} of ${widget.maxPhotos} photos · '
+                    '${_photos.length > widget.maxPhotos ? widget.maxPhotos : _photos.length} of ${widget.maxPhotos} photos · '
                     '${widget.secondsPerPhoto} seconds each · '
                     '${widget.transitionMillis == 0 ? 'No transition' : '${widget.transitionMillis} ms crossfade'}',
                     style: const TextStyle(
@@ -579,6 +612,15 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
         fit: StackFit.expand,
         children: [
           _photoPreview(photo, index, title),
+          if (index >= widget.maxPhotos)
+            Container(
+              color: Colors.white.withValues(alpha: .6),
+              alignment: Alignment.center,
+              child: const Text(
+                'Not included',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
           Positioned(
             left: 8,
             top: 8,

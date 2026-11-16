@@ -36,13 +36,11 @@ void main() {
   });
 
   test('reel settings default and survive a save', () async {
-    expect(const AppSettings().reelMaxPhotos, 15);
     expect(const AppSettings().reelSecondsPerPhoto, 3);
     expect(const AppSettings().reelTransitionMillis, 400);
     expect(const AppSettings().reelTitleStyle, ReelTitleStyle.clean);
 
     const saved = AppSettings(
-      reelMaxPhotos: 20,
       reelSecondsPerPhoto: 5,
       reelTransitionMillis: 750,
       reelTitleStyle: ReelTitleStyle.elegant,
