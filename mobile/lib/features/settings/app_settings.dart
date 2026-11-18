@@ -196,6 +196,7 @@ class AppSettings {
     'timeMode': timeMode.name,
     'documentMode': documentMode.name,
     'contentFilter': contentFilter.name,
+    'contentFilterVersion': _contentFilterVersion,
     'momentWindow': momentWindow.name,
     'momentCount': momentCount,
     'momentVariety': momentVariety.name,
@@ -225,6 +226,7 @@ class AppSettings {
     final time = json['timeMode'];
     final documents = json['documentMode'];
     final content = json['contentFilter'];
+    final contentVersion = json['contentFilterVersion'];
     final window = json['momentWindow'];
     final count = json['momentCount'];
     final variety = json['momentVariety'];
@@ -259,10 +261,16 @@ class AppSettings {
         (value) => value.name == time,
         orElse: () => defaults.timeMode,
       ),
-      contentFilter: ContentFilter.values.firstWhere(
-        (value) => value.name == content,
-        orElse: () => defaults.contentFilter,
-      ),
+      // "All photos" saved before the people-first update was the old default
+      // and not a choice, so it moves to the new default once. Chosen again
+      // afterwards, it is kept.
+      contentFilter: content == ContentFilter.everything.name &&
+              contentVersion != _contentFilterVersion
+          ? defaults.contentFilter
+          : ContentFilter.values.firstWhere(
+              (value) => value.name == content,
+              orElse: () => defaults.contentFilter,
+            ),
       documentMode: DocumentMode.values.firstWhere(
         (value) => value.name == documents,
         orElse: () => defaults.documentMode,
@@ -417,3 +425,6 @@ class SettingsStore {
     await temporary.rename(file.path);
   }
 }
+
+/// Raised when the meaning of the saved content filter changes (see fromJson).
+const _contentFilterVersion = 2;

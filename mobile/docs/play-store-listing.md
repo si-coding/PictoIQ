@@ -16,15 +16,15 @@ Collect memories, not clutter. PictoIQ looks through an album you choose, finds 
 - Best shots: keeps the best of similar clicks and explains the pick. Faces in focus, open eyes and smiles count most, then sharpness, exposure and resolution.
 - One set of filters for both: include people, scenery or both, and decide what happens with documents and screenshots.
 - Share and reels: pick up to 9 best shots or moments, preview them, remove any you do not want to send and put them in the order you like. Share to WhatsApp, Instagram or Facebook, or turn them into a short vertical reel with a title and your own music, built on your phone.
-- Safer sharing: mark any photo as private and PictoIQ will never share it or put it in a reel. Before sharing, PictoIQ also checks photos on your phone for sexual or nude pictures and warns you. The check is not perfect.
+- Review before sharing: see every photo on a preview screen first, remove any you do not want to send, and choose the order.
 - Favourites are protected: photos you starred in your gallery are never suggested for clean-up.
 - "Why is this here?": tap the info button on a photo to see how PictoIQ judged it.
 - Exact duplicates: finds identical photo copies and keeps the oldest.
-- Clutter: finds screenshots, documents, slides and objects, blank or dark, unclear people photos, blurry and tiny photos so you can clear them out in one go.
+- Gallery cleanup (clutter): finds screenshots, documents, slides and objects, blank or dark, unclear people photos, blurry and tiny photos so you can clear them out in one go.
 - Scans look at up to 500 photos at a time (the newest in your chosen album and dates). The home screen shows how much storage is free.
-- Private by design: your photos are analysed on your phone, including the sensitive-picture check, and never uploaded. No account. No ads.
+- Private by design: your photos are analysed on your phone and never uploaded. Nothing is shared until you review it on the preview screen, where you can remove any photo. No account. No ads.
 
-Do not promise that every sensitive or illegal picture is found: the on-device check can miss some and flag harmless ones, and it cannot detect illegal content. In Best shots, Exact duplicates and Clutter, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
+Do not promise that sensitive or illegal pictures are found: the app has no automatic sensitive-picture check; you review what is shared on the preview screen. In Best shots, Exact duplicates and Clutter, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
 
 **Category:** Photography (or Tools). **Tags:** photo cleaner, duplicate photos, best shot.
 
@@ -36,7 +36,7 @@ Do not promise that every sensitive or illegal picture is found: the on-device c
 - Data collected, as disclosed by Google ML Kit (bundled face detection and image labelling):
   - **App info and performance: Diagnostics** (performance metrics, API configuration, error codes). Purpose: App functionality / Analytics. Not shared with third parties (Google says ML Kit does not pass this data on).
   - **App info and performance: Other app performance data** and **Device or other IDs** (per-installation identifier). Purpose: Analytics.
-- Checked on 16 Nov 2026 against Google's ML Kit disclosure: for all features ML Kit collects device information (manufacturer, model, OS version, ML accelerators), app information (package name and version), per-installation identifiers (bundled features use only those, not a device ID), performance metrics, API configuration (image format and resolution), event types and error codes, for diagnostics and analytics. Google says ML Kit does not pass this data to third parties. The page does not state retention. The sensitive-picture check (LiteRT, bundled model) sends nothing: the package has no network code. Nothing else leaves the phone, so the answers stay: photos not collected; data collected: diagnostics, other app performance data and device or other IDs (per-installation); encrypted in transit; not shared.
+- Checked on 16 Nov 2026 against Google's ML Kit disclosure: for all features ML Kit collects device information (manufacturer, model, OS version, ML accelerators), app information (package name and version), per-installation identifiers (bundled features use only those, not a device ID), performance metrics, API configuration (image format and resolution), event types and error codes, for diagnostics and analytics. Google says ML Kit does not pass this data to third parties. The page does not state retention. Nothing else leaves the phone, so the answers stay: photos not collected; data collected: diagnostics, other app performance data and device or other IDs (per-installation); encrypted in transit; not shared.
 - Is all of the data encrypted in transit? **Yes** (HTTPS).
 - Can users request data deletion? Not applicable for ML Kit diagnostics; say so as the form asks.
 - Always check [Google's ML Kit data disclosure](https://developers.google.com/ml-kit/android-data-disclosure) and the Play Console help for the data types, and answer for what your final build actually contains. You are responsible for the answers.

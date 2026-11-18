@@ -279,6 +279,7 @@ class ShotFeatures {
     required this.megapixels,
     this.faces,
     this.labels,
+    this.notes = const [],
   });
 
   static const unknown = ShotFeatures(
@@ -297,6 +298,9 @@ class ShotFeatures {
   /// What the image labeller recognised; null when it did not run (the
   /// filter is off, faces were found, or labelling failed).
   final List<PhotoLabel>? labels;
+
+  /// Why a check did not run or failed, for the "Why is this here?" panel.
+  final List<String> notes;
 }
 
 /// One photo handed to [rankShots].
@@ -436,6 +440,36 @@ const _crushedShare = 0.5;
 // Finalists: up to this many photos within this many points of the best clean one.
 const _maxFinalists = 3;
 const _finalistWindow = 15;
+
+/// Lowest sharpness (see [ImageSignals.sharpness]) a photo with nothing to be
+/// compared with may have and still count as clearly good.
+const loneShotMinSharpness = 60.0;
+
+/// Lowest exposure score (0-100) for a clearly good photo.
+const loneShotMinExposure = 80.0;
+
+/// Whether a photo, judged on its own, is clearly good: in focus, well
+/// exposed, and when it shows a person, with open eyes, nothing cut off, and
+/// a face that is in focus and looking at the camera. Used for photos that
+/// have no similar shots to be ranked against, so only the clearly good ones
+/// are offered as a best shot or moment.
+bool isClearlyGood(ShotFeatures features) {
+  final signals = features.signals;
+  if (signals.isBlank) return false;
+  if (signals.sharpness < loneShotMinSharpness) return false;
+  if (signals.exposureScore < loneShotMinExposure) return false;
+  if (signals.highlightClip > 0.05 || signals.shadowClip > 0.2) return false;
+  final faces = features.faces;
+  if (faces != null && faces.hasProminentFace) {
+    final eyes = faces.eyesOpenMin;
+    if (eyes != null && eyes < 0.5) return false;
+    if (faces.edgeCutoff) return false;
+    final away = faces.lookingAwayMax;
+    if (away != null && away > _lookingAwayDegrees) return false;
+    if (faces.isUnclearSubject()) return false;
+  }
+  return true;
+}
 
 // A face this much softer than the sharpest face in the group is out of focus.
 const _faceBlurRatio = 0.35;

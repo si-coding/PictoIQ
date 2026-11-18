@@ -67,7 +67,7 @@ class _SettingsPageState extends State<SettingsPage> {
             children: bestShotSettingsChildren(_settings, _change),
           ),
           _section(
-            title: 'Clutter',
+            title: 'Gallery cleanup',
             icon: Icons.cleaning_services_outlined,
             note:
                 'Which kinds of photos are listed as clutter. Nothing is deleted until you confirm. Changes apply to the next scan.',

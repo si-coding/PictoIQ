@@ -16,11 +16,11 @@ const _muted = AppColors.body;
 /// The groups of settings that belong to one tool. The same controls are
 /// shown on the Settings page, on a tool's Find screen and above its results.
 enum SettingsCategory {
-  bestMoments('Best moments', 'Change Filter'),
-  bestShot('Best shot and similar photos', 'Change Filter'),
-  duplicates('Exact duplicates', 'Change Filter'),
-  clutter('Clutter', 'Change Filter'),
-  video('Exact duplicate videos', 'Change Filter');
+  bestMoments('Best moments', 'Change filter'),
+  bestShot('Best shot and similar photos', 'Change filter'),
+  duplicates('Exact duplicates', 'Change filter'),
+  clutter('Gallery cleanup', 'Change filter'),
+  video('Exact duplicate videos', 'Change filter');
 
   const SettingsCategory(this.title, this.filterTitle);
   final String title;
@@ -625,7 +625,7 @@ class ScanScopeCard extends StatefulWidget {
 
   /// False when the screen shows the scan's facts itself (the photo results
   /// page does, in its "found" section): the card is then only the
-  /// collapsible "Change Filter" panel.
+  /// collapsible "Change filter" panel.
   final bool showScanDetails;
 
   final String folder;
@@ -732,7 +732,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Change Filter',
+                          'Change filter',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w800,

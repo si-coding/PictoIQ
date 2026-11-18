@@ -31,6 +31,8 @@ import 'package:pictoiq_mobile/core/config/app_limits.dart';
 import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/core/media/image_processing.dart';
 import 'package:pictoiq_mobile/shared/photo_content.dart';
+import 'package:pictoiq_mobile/shared/sensitive_content.dart'
+    show sensitiveThreshold;
 import 'package:pictoiq_mobile/shared/shot_ranking.dart';
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
@@ -157,9 +159,12 @@ class FolderScanPhoto {
   final bool isDocument;
   final List<double>? documentDetail;
 
-  /// True for a document-like image with no faces in it.
+  /// True for a document-like image with no faces in it, or for any file that
+  /// is named or stored like a screenshot (a screenshot of a chat or post can
+  /// show a face, but it is still a screenshot, not a photo).
   bool get isDocumentLike =>
-      isDocument && !(features?.faces?.hasProminentFace ?? false);
+      looksLikeScreenshotFile(name, relativePath) ||
+      (isDocument && !(features?.faces?.hasProminentFace ?? false));
 
   FolderScanPhoto withPreviewBytes(Uint8List? bytes) => FolderScanPhoto(
     uri: uri,
@@ -282,7 +287,9 @@ class FolderDuplicateGroup {
       for (final photo in photos)
         if (!removed.contains(photo.uri)) photo,
     ];
-    if (left.length < 2) return null;
+    // A group of one (a lone good photo) stays; a group that is reduced to
+    // fewer than two photos is no longer a group.
+    if (left.isEmpty || (left.length < 2 && photos.length > 1)) return null;
     if (left.length == photos.length) return this;
     final evidence = this.evidence;
     if (evidence == null) return FolderDuplicateGroup(id: id, photos: left);
@@ -811,6 +818,19 @@ class FolderDuplicateScanner {
   /// Limits for grouping similar photos and rating the confidence of a group.
   final SimilarityThresholds thresholds;
 
+  /// The latest reason a face or label check failed (for the explanation).
+  String? _lastFaceError;
+  String? _lastLabelError;
+
+  /// ML Kit calls run one at a time. Decoding still runs in parallel, but
+  /// several native detector calls at once are not needed and can fail.
+  Future<void> _mlTail = Future<void>.value();
+  Future<T> _serialMl<T>(Future<T> Function() job) {
+    final run = _mlTail.then((_) => job());
+    _mlTail = run.then<void>((_) {}, onError: (Object _) {});
+    return run;
+  }
+
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,
@@ -901,7 +921,17 @@ class FolderDuplicateScanner {
     void Function(int total)? onTotal,
     void Function(int imagesScanned)? onProgress,
     bool Function()? shouldCancel,
+
+    /// Scores a photo's preview from 0 (fine) to 1 (sensitive). When given,
+    /// every analysed photo is checked as it is scanned. Sensitive photos are
+    /// then kept in the results (the app locks and blurs them) instead of
+    /// being dropped by the people or scenery filter.
+    Future<double?> Function(Uint8List preview)? sensitiveScorer,
+
+    /// Receives each score, so the app can reuse it when sharing.
+    Map<String, double>? sensitiveScores,
   }) async {
+    final sensitiveUris = <String>{};
     final images = <FolderScanPhoto>[];
     var imagesScanned = 0;
     var imagesSkipped = 0;
@@ -1072,11 +1102,47 @@ class FolderDuplicateScanner {
                   analysis.faceWidth,
                   analysis.faceHeight,
                 );
+          final preview = analysis.preview;
+          double? sensitiveScore;
+          var sensitiveFailed = false;
+          if (sensitiveScorer != null && !analysis.isDocument) {
+            final score = await _serialMl(() => _safeScore(sensitiveScorer, preview));
+            sensitiveScore = score;
+            if (score == null) {
+              sensitiveFailed = true;
+            }
+            if (score != null) {
+              sensitiveScores?[file.uri] = score;
+              if (score >= sensitiveThreshold) sensitiveUris.add(file.uri);
+            }
+          }
+          final notes = <String>[
+            if (sensitiveFailed)
+              'The sensitive-content check did not run for this photo.',
+            if (sensitiveScore != null)
+              'Sensitive-content score ${sensitiveScore.toStringAsFixed(2)} '
+                  '(locked from ${sensitiveThreshold.toStringAsFixed(2)}).',
+            if (!useFaceSignals)
+              'Faces were not checked: "Use faces and eyes when ranking" is off.'
+            else if (faceBitmap == null)
+              'Faces were not checked: no picture could be prepared for the check.'
+            else if (faces == null)
+              'The face check failed (${_lastFaceError ?? 'unknown error'}).',
+            if (contentFilter == ContentFilter.everything)
+              'Objects were not checked: the filter was All photos when this scan ran.'
+            else if (faceBitmap == null)
+              'Objects were not checked: no picture could be prepared for the check.'
+            else if (faces?.hasProminentFace ?? false)
+              'Objects were not checked: a clear face was found.'
+            else if (labels == null)
+              'The object check failed (${_lastLabelError ?? 'unknown error'}).',
+          ];
           features = ShotFeatures(
             signals: analysis.signals,
             megapixels: analysis.megapixels,
             faces: faces,
             labels: labels,
+            notes: notes,
           );
         }
         // Scores are relative to the rest of a group, so they are filled in
@@ -1150,6 +1216,7 @@ class FolderDuplicateScanner {
             thresholds ?? this.thresholds,
             documentMode,
             contentFilter,
+            sensitiveUris,
           ),
         );
       }
@@ -1216,7 +1283,10 @@ class FolderDuplicateScanner {
       documentsLeftOut: !bestShotsScan
           ? 0
           : images
-                .where((photo) => _leftOut(photo, documentMode, contentFilter))
+                .where(
+                  (photo) =>
+                      _leftOut(photo, documentMode, contentFilter, sensitiveUris),
+                )
                 .length,
     );
   }
@@ -1371,13 +1441,16 @@ class FolderDuplicateScanner {
   static bool _leftOut(
     FolderScanPhoto photo,
     DocumentMode documentMode,
-    ContentFilter contentFilter,
-  ) {
+    ContentFilter contentFilter, [
+    Set<String> sensitive = const {},
+  ]) {
     if (documentMode == DocumentMode.leaveOut && photo.isDocumentLike) {
       return true;
     }
     if (contentFilter == ContentFilter.everything) return false;
     if (photo.isDocumentLike) return true;
+    // A sensitive photo is kept so it can be shown locked, whatever it shows.
+    if (sensitive.contains(photo.uri)) return false;
     final faces = photo.features?.faces;
     final faceCount = faces == null
         ? null
@@ -1404,6 +1477,17 @@ class FolderDuplicateScanner {
     };
   }
 
+  Future<double?> _safeScore(
+    Future<double?> Function(Uint8List preview) scorer,
+    Uint8List preview,
+  ) async {
+    try {
+      return await scorer(preview);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Names what is in the photo, using the on-device ML Kit labeller. Returns
   /// null when it fails, so the photo is kept rather than hidden.
   Future<List<PhotoLabel>?> _labelContent(
@@ -1415,14 +1499,17 @@ class FolderDuplicateScanner {
       final labeler = _labeler ??= ImageLabeler(
         options: ImageLabelerOptions(confidenceThreshold: 0.4),
       );
-      final labels = await labeler.processImage(
-        InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
+      final labels = await _serialMl(
+        () => labeler.processImage(
+          InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
+        ),
       );
       return [
         for (final label in labels) PhotoLabel(label.label, label.confidence),
       ];
     } catch (error) {
       debugPrint('Photo labels unavailable: ${error.runtimeType} $error');
+      _lastLabelError = '${error.runtimeType}: $error';
       return null;
     }
   }
@@ -1438,8 +1525,10 @@ class FolderDuplicateScanner {
     try {
       // Pixels go straight to the detector. Passing a temporary image file
       // failed on a real phone with a null-pointer error inside Android.
-      final faces = await _faceDetector.processImage(
-        InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
+      final faces = await _serialMl(
+        () => _faceDetector.processImage(
+          InputImage.fromBitmap(bitmap: rgba, width: width, height: height),
+        ),
       );
       if (faces.isEmpty) return FaceSignals.none;
       double? eyesOpenMin;
@@ -1552,9 +1641,11 @@ class FolderDuplicateScanner {
         'Face signals unavailable: PlatformException '
         'code=${error.code} message=${error.message} details=${error.details}',
       );
+      _lastFaceError = 'code=${error.code} ${error.message}';
       return null;
     } catch (error) {
       debugPrint('Face signals unavailable: ${error.runtimeType} $error');
+      _lastFaceError = '${error.runtimeType}: $error';
       return null;
     }
   }
@@ -1602,10 +1693,11 @@ class FolderDuplicateScanner {
     SimilarityThresholds thresholds,
     DocumentMode documentMode,
     ContentFilter contentFilter,
+    Set<String> sensitive,
   ) {
     final images = [
       for (final photo in allImages)
-        if (!_leftOut(photo, documentMode, contentFilter)) photo,
+        if (!_leftOut(photo, documentMode, contentFilter, sensitive)) photo,
     ];
     final clusters = clusterSimilar(
       [
@@ -1628,11 +1720,28 @@ class FolderDuplicateScanner {
       ],
       thresholds: thresholds,
     );
+    final grouped = {for (final cluster in clusters) ...cluster.members};
     return [
       for (final cluster in clusters)
         _rankedGroup([
           for (final index in cluster.members) images[index],
         ], cluster.evidence),
+      // A photo with nothing similar to it is still a best shot or moment of
+      // its own, when it is clearly good.
+      for (var i = 0; i < images.length; i++)
+        if (!grouped.contains(i) &&
+            images[i].features != null &&
+            isClearlyGood(images[i].features!))
+          _rankedGroup(
+            [images[i]],
+            const SimilarityEvidence(
+              confidence: SimilarityConfidence.high,
+              maxDistance: 0,
+              spanMs: 0,
+              captureSource: CaptureSource.unknown,
+              size: 1,
+            ),
+          ),
     ];
   }
 

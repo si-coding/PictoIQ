@@ -51,8 +51,9 @@ const objectLabels = {
   'tablet computer', 'rectangle', 'line', 'pattern', 'parallel', 'web page',
   'website', 'lecture', 'public speaking', 'seminar', 'conference',
   'plastic', 'stool', 'chair', 'household', 'floor', 'flooring',
-  'carpet', 'rug', 'textile', 
-  
+  'carpet', 'rug', 'textile', 'vehicle', 'motor vehicle', 'land vehicle',
+  'wheel', 'tire', 'motorcycle', 'bicycle wheel', 'bicycle part',
+  'bicycle tire', 'automotive design', 'helmet', 'bumper',
 };
 
 /// The strongest label in each group, for showing why a photo was kept or

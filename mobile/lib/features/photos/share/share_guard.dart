@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart'
-    show FolderScanPhoto;
+    show FolderScanPhoto, ScanCancelled;
 import 'package:pictoiq_mobile/shared/sensitive_content.dart';
 
 /// The result of checking photos before they are shared or put in a reel.
@@ -32,34 +32,63 @@ Future<ShareScreening> screenForSharing(
   required Set<String> markedPrivate,
   required SensitiveContentDetector detector,
   required Future<Uint8List?> Function(String uri) loadBytes,
+  Map<String, double>? cache,
+  void Function(int done)? onProgress,
+  bool Function()? shouldCancel,
 }) async {
   final clear = <FolderScanPhoto>[];
   final blocked = <FolderScanPhoto>[];
   var unchecked = 0;
-  for (final photo in photos) {
-    if (markedPrivate.contains(photo.uri)) {
-      blocked.add(photo);
-      continue;
+  // Loading and shrinking each picture is the slow part, so a few are loaded
+  // at once; the detector itself is still called one picture at a time.
+  const batchSize = 4;
+  for (var start = 0; start < photos.length; start += batchSize) {
+    final batch = photos.sublist(
+      start,
+      start + batchSize > photos.length ? photos.length : start + batchSize,
+    );
+    if (shouldCancel?.call() ?? false) throw const ScanCancelled();
+    final loading = <Future<Uint8List?>?>[
+      for (final photo in batch)
+        markedPrivate.contains(photo.uri) ||
+                !detector.isAvailable ||
+                (cache?.containsKey(photo.uri) ?? false)
+            ? null
+            : loadBytes(photo.uri).then<Uint8List?>(
+                (bytes) => bytes,
+                onError: (Object _) => null,
+              ),
+    ];
+    for (var i = 0; i < batch.length; i++) {
+      final photo = batch[i];
+      if (markedPrivate.contains(photo.uri)) {
+        blocked.add(photo);
+        continue;
+      }
+      if (!detector.isAvailable) {
+        clear.add(photo);
+        continue;
+      }
+      double? score = cache?[photo.uri];
+      if (score == null) {
+        try {
+          final bytes = await loading[i];
+          score = bytes == null ? null : await detector.score(bytes);
+        } catch (_) {
+          score = null;
+        }
+        if (score != null) cache?[photo.uri] = score;
+      }
+      if (score == null) {
+        unchecked++;
+        clear.add(photo);
+      } else if (score >= sensitiveThreshold) {
+        blocked.add(photo);
+      } else {
+        clear.add(photo);
+      }
     }
-    if (!detector.isAvailable) {
-      clear.add(photo);
-      continue;
-    }
-    double? score;
-    try {
-      final bytes = await loadBytes(photo.uri);
-      score = bytes == null ? null : await detector.score(bytes);
-    } catch (_) {
-      score = null;
-    }
-    if (score == null) {
-      unchecked++;
-      clear.add(photo);
-    } else if (score >= sensitiveThreshold) {
-      blocked.add(photo);
-    } else {
-      clear.add(photo);
-    }
+    onProgress?.call(start + batch.length);
   }
   return ShareScreening(clear: clear, blocked: blocked, unchecked: unchecked);
 }

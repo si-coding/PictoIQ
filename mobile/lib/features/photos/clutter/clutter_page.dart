@@ -231,7 +231,7 @@ class _ClutterPageState extends State<ClutterPage> {
         ],
         title: const AppBarTitle(
           icon: Icons.cleaning_services_outlined,
-          title: 'Clutter',
+          title: 'Gallery cleanup',
         ),
       ),
       body: Column(

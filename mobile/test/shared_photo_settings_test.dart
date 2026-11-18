@@ -154,7 +154,7 @@ void main() {
     });
   });
 
-  group('results Change Filter panel', () {
+  group('results Change filter panel', () {
     Widget host({VoidCallback? onFindAgain, ValueChanged<AppSettings>? onChanged}) =>
         MaterialApp(
           home: Scaffold(
@@ -174,9 +174,9 @@ void main() {
           ),
         );
 
-    testWidgets('is just a collapsed Change Filter row', (tester) async {
+    testWidgets('is just a collapsed Change filter row', (tester) async {
       await tester.pumpWidget(host());
-      expect(find.text('Change Filter'), findsOneWidget);
+      expect(find.text('Change filter'), findsOneWidget);
       expect(find.text('Scan details'), findsNothing);
       expect(find.text('Camera · Last 7 days'), findsNothing);
       expect(find.text('Which photos to include'), findsNothing);
@@ -187,7 +187,7 @@ void main() {
     ) async {
       var again = 0;
       await tester.pumpWidget(host(onFindAgain: () => again++));
-      await tester.tap(find.text('Change Filter'));
+      await tester.tap(find.text('Change filter'));
       await tester.pumpAndSettle();
       expect(find.text('Which photos to include'), findsOneWidget);
       expect(find.text('This scan'), findsNothing);

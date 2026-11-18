@@ -61,6 +61,11 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            // Keep rules for the ML Kit plugins (see proguard-rules.pro).
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

@@ -1,16 +1,15 @@
 import 'dart:typed_data';
 
 /// A score at or above this means a picture is treated as sensitive.
-const sensitiveThreshold = 0.6;
+const sensitiveThreshold = 0.4;
 
 /// Decides whether a picture looks sexual, nude or otherwise sensitive, so it
 /// is never shared or put in a reel. Everything runs on the phone.
 ///
 /// Android's built-in labeller (ML Kit's default model) cannot do this: its
 /// label list has no nudity or underwear labels, so a detector needs its own
-/// model. The app uses `OnDeviceSensitiveDetector` (a bundled model) and falls
-/// back to [NoSensitiveDetector], which relies on photos the person marked as
-/// private, when the model cannot load. No model is perfect: it can miss
+/// model. The app currently uses [NoSensitiveDetector], which relies on photos the
+/// person marked as private; a model-based detector can be added later. No model is perfect: it can miss
 /// pictures and flag harmless ones.
 abstract class SensitiveContentDetector {
   /// True when this detector can really recognise sensitive pictures.

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -9,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:pictoiq_mobile/shared/app_menu_button.dart';
 import 'package:pictoiq_mobile/core/config/app_colors.dart';
+import 'package:pictoiq_mobile/core/config/app_info.dart';
 import 'package:pictoiq_mobile/core/config/app_limits.dart';
 import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
@@ -28,7 +30,6 @@ import 'package:pictoiq_mobile/features/photos/best_moments/moment_selection.dar
 import 'package:pictoiq_mobile/core/media/media_asset.dart';
 import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
 import 'package:pictoiq_mobile/core/device/device_storage.dart';
-import 'package:pictoiq_mobile/shared/on_device_sensitive_detector.dart';
 import 'package:pictoiq_mobile/core/storage/private_photos.dart';
 import 'package:pictoiq_mobile/features/photos/share/share_guard.dart';
 import 'package:pictoiq_mobile/features/photos/share/sensitive_warning.dart';
@@ -272,8 +273,11 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Photos marked private, and the check for sensitive pictures. Both are
   /// applied before anything is shared or put in a reel.
   final _privatePhotos = PrivatePhotoStore();
+  // No automatic detector is bundled yet, so only photos the person marked
+  // private are kept out of shares and reels. A detector that implements
+  // SensitiveContentDetector can be put here later.
   final SensitiveContentDetector _sensitiveDetector =
-      OnDeviceSensitiveDetector();
+      const NoSensitiveDetector();
   final _videoReelService = VideoReelService();
   final _videoScanner = VideoDuplicateScanner();
 
@@ -322,6 +326,26 @@ class _LibraryPageState extends State<LibraryPage> {
   bool _importing = false;
   bool _scanningFolder = false;
   bool _creatingReel = false;
+
+  /// True while photos are being checked and the next screen is opening, so
+  /// repeated taps on Share or Create reel are ignored.
+  bool _openingShare = false;
+
+  /// Which button started the check: 'share' or 'reel'.
+  String _openingFor = '';
+
+  /// How likely each result photo is to be sensitive (0-1), worked out once
+  /// during the scan and kept on the phone. Never saved or sent anywhere.
+  final Map<String, double> _sensitiveScores = {};
+  int? _sensitiveTotal;
+  int _sensitiveDone = 0;
+
+  bool _isSensitive(String uri) =>
+      (_sensitiveScores[uri] ?? 0) >= sensitiveThreshold;
+
+  /// A photo that is marked private or found sensitive: it is blurred in the
+  /// results and never shared or put in a reel.
+  bool _isLocked(String uri) => _privatePhotos.contains(uri) || _isSensitive(uri);
   bool _cancelReelRequested = false;
   bool _reelNativeStarted = false;
   bool _scanningBestShots = false;
@@ -609,14 +633,18 @@ class _LibraryPageState extends State<LibraryPage> {
   /// newest group first, ready to share.
   List<FolderScanPhoto> _picksToShare(Iterable<FolderDuplicateGroup> groups) {
     final picks = <FolderScanPhoto>[];
+    final lone = <FolderScanPhoto>[];
     for (final group in groups) {
       final decision = _decisionFor(group, bestShots: true);
       if (!decision.hasDecision) continue;
       for (final photo in group.photos) {
-        if (decision.keepIds.contains(photo.uri)) picks.add(photo);
+        if (decision.keepIds.contains(photo.uri)) {
+          (group.photos.length > 1 ? picks : lone).add(photo);
+        }
       }
     }
-    return picks;
+    // Photos that were compared with others come first; lone photos follow.
+    return [...picks, ...lone];
   }
 
   /// Checks [photos] before they are shared or put in a reel. Photos marked
@@ -627,12 +655,68 @@ class _LibraryPageState extends State<LibraryPage> {
     List<FolderScanPhoto> photos, {
     required String action,
   }) async {
-    final screening = await screenForSharing(
-      photos,
-      markedPrivate: _privatePhotos.all,
-      detector: _sensitiveDetector,
-      loadBytes: _folderScanner.loadLargePreview,
+    // Most photos were already checked during the scan. When some were not,
+    // a dialog blocks the screen (and the back button) while they are.
+    final needsCheck = _sensitiveDetector.isAvailable &&
+        photos.any(
+      (photo) =>
+          !_privatePhotos.contains(photo.uri) &&
+          !_sensitiveScores.containsKey(photo.uri),
     );
+    var dialogOpen = false;
+    if (needsCheck && mounted) {
+      dialogOpen = true;
+      unawaited(
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const PopScope(
+            canPop: false,
+            child: AlertDialog(
+              content: Row(
+                children: [
+                  SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                  SizedBox(width: 16),
+                  Expanded(child: Text('Checking photos…')),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final ShareScreening screening;
+    try {
+      screening = await screenForSharing(
+        photos,
+        markedPrivate: _privatePhotos.all,
+        detector: _sensitiveDetector,
+        loadBytes: (uri) async {
+          for (final photo in photos) {
+            if (photo.uri == uri && photo.previewBytes != null) {
+              return photo.previewBytes;
+            }
+          }
+          return _folderScanner.loadLargePreview(uri);
+        },
+        cache: _sensitiveScores,
+      );
+    } finally {
+      if (dialogOpen && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+    }
+    if (screening.unchecked > 0 && mounted) {
+      _showMessage(
+        '${screening.unchecked} photo${screening.unchecked == 1 ? '' : 's'} '
+        'could not be checked for sensitive pictures. Please look at '
+        '${screening.unchecked == 1 ? 'it' : 'them'} before sharing.',
+      );
+    }
     if (screening.blocked.isEmpty) return screening.clear;
     if (!mounted) return null;
     final choice = await showSensitiveWarning(
@@ -668,14 +752,24 @@ class _LibraryPageState extends State<LibraryPage> {
   /// Opens Android's share sheet with [photos]; WhatsApp (status or chat),
   /// Instagram and Facebook appear there when they are installed.
   Future<void> _sharePhotos(List<FolderScanPhoto> picks) async {
-    if (picks.isEmpty) return;
-    final chosen = await _screenForSharing(picks, action: 'share');
+    if (picks.isEmpty || _openingShare) return;
+    setState(() {
+      _openingShare = true;
+      _openingFor = 'share';
+    });
+    final List<FolderScanPhoto>? chosen;
+    try {
+      chosen = await _screenForSharing(picks, action: 'share');
+    } finally {
+      if (mounted) setState(() => _openingShare = false);
+    }
     if (chosen == null || chosen.isEmpty || !mounted) return;
+    final toPreview = chosen;
     // Let the person look at (and drop) photos before anything is sent.
     final photos = await Navigator.of(context).push<List<FolderScanPhoto>>(
       MaterialPageRoute(
         builder: (_) => SharePreviewPage(
-          photos: chosen,
+          photos: toPreview,
           title: _moments ? 'Share best moments' : 'Share best shots',
           noun: _moments ? 'best moments' : 'best shots',
           maxPhotos: AppLimits.shareMaxPhotos,
@@ -683,6 +777,10 @@ class _LibraryPageState extends State<LibraryPage> {
       ),
     );
     if (photos == null || photos.isEmpty || !mounted) return;
+    if (photos.any((p) => _privatePhotos.contains(p.uri))) {
+      _showMessage('A photo is marked private, so it was not shared.');
+      return;
+    }
     final messenger = ScaffoldMessenger.of(context);
     // Only the first few are shared at a time (see AppLimits).
     final batch = photos.take(AppLimits.shareMaxPhotos).toList();
@@ -714,13 +812,22 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   Future<void> _createPhotoReel(FolderScanResult scan) async {
-    if (_creatingReel) return;
+    if (_creatingReel || _openingShare) return;
     final picks = _picksToShare(scan.duplicateGroups);
     if (picks.isEmpty) {
       _showMessage('No selected photos are available to add to a reel.');
       return;
     }
-    final allowed = await _screenForSharing(picks, action: 'put in a reel');
+    setState(() {
+      _openingShare = true;
+      _openingFor = 'reel';
+    });
+    final List<FolderScanPhoto>? allowed;
+    try {
+      allowed = await _screenForSharing(picks, action: 'put in a reel');
+    } finally {
+      if (mounted) setState(() => _openingShare = false);
+    }
     if (allowed == null || allowed.isEmpty || !mounted) return;
     // The editor lists every photo and says which ones fit in the reel.
     final photos = allowed;
@@ -745,6 +852,14 @@ class _LibraryPageState extends State<LibraryPage> {
 
   Future<void> _exportConfiguredReel(ReelConfiguration configuration) async {
     if (_creatingReel) return;
+    // A last check: a photo marked private while the editor was open is
+    // never put in a reel.
+    if (configuration.photos.any((p) => _privatePhotos.contains(p.uri))) {
+      _showMessage(
+        'A photo in this reel is marked private. Go back and remove it.',
+      );
+      return;
+    }
     _cancelReelRequested = false;
     _reelNativeStarted = false;
     setState(() => _creatingReel = true);
@@ -1065,7 +1180,7 @@ class _LibraryPageState extends State<LibraryPage> {
           },
           loadVideoGallery: (_) async => const [],
           scanEnabled: Platform.isAndroid && !_scanningFolder && !_importing,
-          scanLabel: 'Find ${_photoFeatureTitle(mode)}',
+          scanLabel: _photoScanLabel(mode),
           settingsPanel: _settingsPanel(_categoryFor(mode)),
           onSettings: _openSettings,
           onPrivacy: _showPrivacy,
@@ -1165,27 +1280,35 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   String _photoFeatureTitle(ScanMode mode) => switch (mode) {
-    ScanMode.bestMoments => 'Best Moments',
-    ScanMode.duplicates => 'Exact Duplicates',
-    ScanMode.bestShot => 'Best Shots',
-    ScanMode.clutter => 'Clutter',
+    ScanMode.bestMoments => 'Best moments',
+    ScanMode.duplicates => 'Exact photos',
+    ScanMode.bestShot => 'Best shots',
+    ScanMode.clutter => 'Gallery cleanup',
+  };
+
+  /// The scan button's label, which reads better than "Find" plus the tool name.
+  String _photoScanLabel(ScanMode mode) => switch (mode) {
+    ScanMode.bestMoments => 'Find best moments',
+    ScanMode.duplicates => 'Find exact photos',
+    ScanMode.bestShot => 'Find best shots',
+    ScanMode.clutter => 'Find unwanted photos',
   };
 
   String _photoFeatureDescription(ScanMode mode) => switch (mode) {
     ScanMode.bestMoments =>
       'Find meaningful moments and choose the photos you want to share.',
     ScanMode.duplicates =>
-      'Find byte-for-byte copies of the same photo and review them safely.',
+      'Find identical photos and review them safely.',
     ScanMode.bestShot => 'Compare similar photos and keep your strongest shot.',
     ScanMode.clutter =>
-      'Find blurry, blank, tiny and other clutter photos to review.',
+      'Find unwanted photos such as screenshots, blank and blurry ones, and review them.',
   };
 
   String _videoFeatureTitle(VideoTool tool) => switch (tool) {
-    VideoTool.exactDuplicates => 'Exact Video Duplicates',
-    VideoTool.similarVideos => 'Similar Videos',
-    VideoTool.bestMoments => 'Video Best Moments',
-    VideoTool.enhance => 'Video Enhance',
+    VideoTool.exactDuplicates => 'Exact videos',
+    VideoTool.similarVideos => 'Similar videos',
+    VideoTool.bestMoments => 'Video best moments',
+    VideoTool.enhance => 'Video enhance',
   };
 
   String _videoFeatureDescription(VideoTool tool) => switch (tool) {
@@ -1234,7 +1357,7 @@ class _LibraryPageState extends State<LibraryPage> {
       debugPrint('Folder picker failed: $error');
       if (mounted) {
         _showMessage(
-          'PictoIQ could not open the folder picker (${error.runtimeType}). Try again.',
+          'PictoIQ could not open the folder picker. Please try again.',
         );
       }
       return null;
@@ -1349,6 +1472,10 @@ class _LibraryPageState extends State<LibraryPage> {
           }
         },
         shouldCancel: () => _cancelRequested,
+        sensitiveScorer: bestShots && !clutter && _sensitiveDetector.isAvailable
+            ? _sensitiveDetector.score
+            : null,
+        sensitiveScores: _sensitiveScores,
       );
       if (clutter) {
         clutterResult = scanned;
@@ -1371,6 +1498,42 @@ class _LibraryPageState extends State<LibraryPage> {
               if (group.photos.every((p) => p.features?.faces?.count == 0))
                 group.id,
           });
+        }
+        if (bestShots && _sensitiveDetector.isAvailable) {
+          // Check the result photos once, here, so Share and Create reel are
+          // instant and private photos can be marked in the results.
+          final previews = {
+            for (final group in result.duplicateGroups)
+              for (final photo in group.photos) photo.uri: photo.previewBytes,
+          };
+          final toCheck = [
+            for (final group in result.duplicateGroups) ...group.photos,
+          ];
+          if (mounted) {
+            setState(() {
+              _sensitiveTotal = toCheck.length;
+              _sensitiveDone = 0;
+            });
+            _scanProgressRevision.value++;
+          }
+          try {
+            await screenForSharing(
+              toCheck,
+              markedPrivate: _privatePhotos.all,
+              detector: _sensitiveDetector,
+              loadBytes: (uri) async =>
+                  previews[uri] ?? await _folderScanner.loadLargePreview(uri),
+              cache: _sensitiveScores,
+              shouldCancel: () => _cancelRequested,
+              onProgress: (done) {
+                if (!mounted) return;
+                setState(() => _sensitiveDone = done);
+                _scanProgressRevision.value++;
+              },
+            );
+          } finally {
+            if (mounted) setState(() => _sensitiveTotal = null);
+          }
         }
         if (!mounted) return false;
         setState(() {
@@ -2202,6 +2365,14 @@ class _LibraryPageState extends State<LibraryPage> {
           : _folderImagesFound > 0
           ? 'Finding $noun… $_folderImagesFound found · $clock'
           : 'Finding $noun… $clock';
+    } else if (_sensitiveTotal != null) {
+      final checkTotal = _sensitiveTotal!;
+      final fraction = checkTotal == 0
+          ? 1.0
+          : (_sensitiveDone / checkTotal).clamp(0.0, 1.0);
+      value = fraction;
+      label =
+          'Checking for private photos… ${(fraction * 100).floor()}% · $_sensitiveDone of $checkTotal';
     } else {
       final fraction = total == 0
           ? 1.0
@@ -2495,7 +2666,8 @@ class _LibraryPageState extends State<LibraryPage> {
         scan.duplicateGroups.isNotEmpty &&
         _showBestResults &&
         !_importing &&
-        !_creatingReel;
+        !_creatingReel &&
+        !_openingShare;
     Widget action({
       required IconData icon,
       required String label,
@@ -2537,7 +2709,7 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             action(
               icon: Icons.ios_share_outlined,
-              label: 'Share',
+              label: _openingShare && _openingFor == 'share' ? 'Checking…' : 'Share',
               color: _green,
               onTap: canShare
                   ? () => unawaited(
@@ -2547,7 +2719,11 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
             action(
               icon: Icons.movie_creation_outlined,
-              label: _creatingReel ? 'Creating…' : 'Create reel',
+              label: _creatingReel
+                  ? 'Creating…'
+                  : (_openingShare && _openingFor == 'reel'
+                        ? 'Checking…'
+                        : 'Create reel'),
               color: _green,
               onTap: canShare ? () => unawaited(_createPhotoReel(scan)) : null,
             ),
@@ -2673,10 +2849,10 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget _resultsTopBar() {
     final bestShots = _resultsAreBestShots;
     final (icon, title) = _moments && bestShots
-        ? (Icons.collections_outlined, 'Best Moments')
+        ? (Icons.collections_outlined, 'Best moments')
         : bestShots
-        ? (Icons.photo_camera_outlined, 'Best Shots')
-        : (Icons.copy_all_outlined, 'Exact Duplicates');
+        ? (Icons.photo_camera_outlined, 'Best shots')
+        : (Icons.copy_all_outlined, 'Exact photos');
     return ColoredBox(
       color: AppColors.pageTop,
       child: SafeArea(
@@ -2731,7 +2907,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 ButtonSegment(
                   value: false,
                   icon: Icon(Icons.copy_all_outlined),
-                  label: Text('Exact copies'),
+                  label: Text('Exact photos'),
                 ),
               ],
               selected: {_showBestResults},
@@ -2801,25 +2977,56 @@ class _LibraryPageState extends State<LibraryPage> {
       ),
       const SizedBox(height: 18),
       ],
-      Text(
-        _videoMode ? 'Ready to free up space?' : 'Ready to tidy your memories?',
-        style: const TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.w800,
-          letterSpacing: -.4,
+      if (_videoMode) ...[
+        const Text(
+          'Ready to free up space?',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -.4,
+          ),
         ),
-      ),
-      const SizedBox(height: 5),
-      Text(
-        _videoMode
-            ? 'Explore tools for your video library.'
-            : 'Choose a photo tool to start exploring your library.',
-        style: const TextStyle(
-          color: AppColors.hint,
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
+        const SizedBox(height: 5),
+        const Text(
+          'Explore tools for your video library.',
+          style: TextStyle(
+            color: AppColors.hint,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-      ),
+      ] else
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 2),
+          child: Text.rich(
+            TextSpan(
+              children: [
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Padding(
+                    padding: EdgeInsets.only(right: 6),
+                    child: Icon(
+                      Icons.auto_awesome,
+                      size: 18,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                ),
+                TextSpan(
+                  text:
+                      'Choose a photo tool, and discover your photo library effortlessly.',
+                ),
+              ],
+            ),
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.4,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -.1,
+              color: AppColors.body,
+            ),
+          ),
+        ),
       const SizedBox(height: 14),
       _videoMode ? _videoToolsGrid() : _toolsGrid(),
       const SizedBox(height: 14),
@@ -2830,17 +3037,17 @@ class _LibraryPageState extends State<LibraryPage> {
           border: Border.all(color: const Color(0xFFE6E8E0)),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Column(
+        child: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(
+                Icon(
                   Icons.lightbulb_outline,
                   size: 16,
                   color: Color(0xFFB78313),
                 ),
-                const SizedBox(width: 6),
+                SizedBox(width: 6),
                 Text(
                   'A little inspiration',
                   style: TextStyle(
@@ -2851,18 +3058,19 @@ class _LibraryPageState extends State<LibraryPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            const Text(
-              '“Keep the best, let the rest go.”',
+            SizedBox(height: 8),
+            Text(
+              '“The Best moments deserve to be cherished forever.”',
               style: TextStyle(
                 fontSize: 16,
+                height: 1.3,
                 fontStyle: FontStyle.italic,
                 fontWeight: FontWeight.w700,
                 color: _green,
               ),
             ),
-            const SizedBox(height: 4),
-            const Text(
+            SizedBox(height: 4),
+            Text(
               'The PictoIQ philosophy',
               style: TextStyle(fontSize: 11, color: Color(0xFF85877F)),
             ),
@@ -3026,22 +3234,17 @@ class _LibraryPageState extends State<LibraryPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _header(),
+          if (_videoMode) ...[
           const SizedBox(height: 16),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-            _videoMode
-                ? 'Free up space from duplicate videos.'
-                : 'Make your best memories shine.',
-            maxLines: 1,
-            style: const TextStyle(
-              fontSize: 26,
-              height: 1.15,
+          const Text(
+            'Free up space from duplicate videos.',
+            maxLines: 3,
+            style: TextStyle(
+              fontSize: 24,
+              height: 1.2,
               fontWeight: FontWeight.w800,
-              letterSpacing: -.5,
+              letterSpacing: -.4,
               color: AppColors.heroTitle,
-            ),
             ),
           ),
           const SizedBox(height: 3),
@@ -3059,10 +3262,9 @@ class _LibraryPageState extends State<LibraryPage> {
                     ),
                   ),
                 ),
-                TextSpan(
-                  text: _videoMode
-                      ? 'Find identical copies of your videos and clear them out safely.'
-                      : 'Discover your best photos, organise your gallery and find duplicate pictures effortlessly.',
+                const TextSpan(
+                  text:
+                      'Find identical copies of your videos and clear them out safely.',
                 ),
               ],
             ),
@@ -3072,24 +3274,48 @@ class _LibraryPageState extends State<LibraryPage> {
               color: AppColors.heroBody,
             ),
           ),
+          ],
           const SizedBox(height: 14),
+          // Shown once PictoIQ can see the photos (access is asked at the first
+          // scan, or earlier if it was already given).
           if (snapshot != null) ...[
+            const Padding(
+              padding: EdgeInsets.only(left: 2, bottom: 8),
+              child: Text(
+                'Your photo library',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .1,
+                  color: AppColors.heroTitle,
+                ),
+              ),
+            ),
             IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: _heroStat(_thousands(snapshot.photos), 'Photos'),
+                    child: _heroStat(
+                      _thousands(snapshot.photos),
+                      'Photos',
+                    ),
                   ),
                   if (_videoEnabled) ...[
                     const SizedBox(width: 8),
                     Expanded(
-                      child: _heroStat(_thousands(snapshot.videos), 'Videos'),
+                      child: _heroStat(
+                        _thousands(snapshot.videos),
+                        'Videos',
+                      ),
                     ),
                   ],
                   const SizedBox(width: 8),
                   Expanded(
-                    child: _heroStat(_thousands(snapshot.albums), 'Albums'),
+                    child: _heroStat(
+                      _thousands(snapshot.albums),
+                      'Albums',
+                    ),
                   ),
                   if (_freeBytesOnDevice != null) ...[
                     const SizedBox(width: 8),
@@ -3103,23 +3329,25 @@ class _LibraryPageState extends State<LibraryPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
           ],
           // Said once, below the totals, instead of taking a tile of its own.
           const Row(
             children: [
               Icon(
-                Icons.lock_outline,
-                size: 16,
+                Icons.verified_user_outlined,
+                size: 18,
                 color: AppColors.heroStatLabel,
               ),
-              SizedBox(width: 6),
-              Text(
-                '100% on device · nothing leaves your phone',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.heroStatLabel,
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '100% - Your photos stay on your device',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.heroStatLabel,
+                  ),
                 ),
               ),
             ],
@@ -3179,10 +3407,8 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             Expanded(
               child: _toolTile(
-                title: 'Best Moments',
-                text: _settings.momentCount == 1
-                    ? 'The best photo of each moment, to share.'
-                    : 'The best ${_settings.momentCount} photos of each moment, to share.',
+                title: 'Best moments',
+                text: 'Discover the moments worth remembering.',
                 chip: 'On-device AI',
                 icon: Icons.collections_outlined,
                 colors: AppToolColors.moments,
@@ -3192,8 +3418,8 @@ class _LibraryPageState extends State<LibraryPage> {
             const SizedBox(width: 10),
             Expanded(
               child: _toolTile(
-                title: 'Exact Duplicates',
-                text: 'Find identical copies and free space.',
+                title: 'Exact photos',
+                text: 'Find identical photos and free space.',
                 chip: 'Smart scan',
                 icon: Icons.copy_all_outlined,
                 colors: AppToolColors.duplicates,
@@ -3210,7 +3436,7 @@ class _LibraryPageState extends State<LibraryPage> {
           children: [
             Expanded(
               child: _toolTile(
-                title: 'Best Shots',
+                title: 'Best shots',
                 text: 'Keep the best photo from similar clicks.',
                 chip: 'On-device AI',
                 icon: Icons.photo_camera_outlined,
@@ -3221,8 +3447,8 @@ class _LibraryPageState extends State<LibraryPage> {
             const SizedBox(width: 10),
             Expanded(
               child: _toolTile(
-                title: 'Clutter',
-                text: 'Find screenshots, blank and blurry photos.',
+                title: 'Gallery cleanup',
+                text: 'Find unwanted photos.',
                 chip: 'Smart scan',
                 icon: Icons.cleaning_services_outlined,
                 colors: AppToolColors.clutter,
@@ -3262,7 +3488,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Expanded(
                 child: tile(
                   VideoTool.exactDuplicates,
-                  'Exact Duplicates',
+                  'Exact videos',
                   'Find identical video copies and free space.',
                   Icons.copy_all_outlined,
                   AppToolColors.videoDuplicates,
@@ -3272,7 +3498,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Expanded(
                 child: tile(
                   VideoTool.similarVideos,
-                  'Similar Videos',
+                  'Similar videos',
                   'Find repeated recordings of the same scene.',
                   Icons.movie_outlined,
                   AppToolColors.videoSimilar,
@@ -3289,7 +3515,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Expanded(
                 child: tile(
                   VideoTool.bestMoments,
-                  'Best Moments',
+                  'Best moments',
                   'Discover meaningful moments inside your videos.',
                   Icons.video_library_outlined,
                   AppToolColors.videoMoments,
@@ -3299,7 +3525,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Expanded(
                 child: tile(
                   VideoTool.enhance,
-                  'Video Enhance',
+                  'Video enhance',
                   'Improve brightness, clarity and stability.',
                   Icons.auto_fix_high_outlined,
                   AppToolColors.videoEnhance,
@@ -3426,8 +3652,10 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
                 const SizedBox(height: 8),
+                // Pushes the label to the bottom, so the labels of tiles in a
+                // row line up whatever the length of their text.
+                const Spacer(),
                 if (chip != null) ...[
-                  const SizedBox(height: 8),
                   // Its own line, so the label can wrap instead of being cut.
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -3781,7 +4009,7 @@ class _LibraryPageState extends State<LibraryPage> {
               ),
               child: Text(
                 _freedBytes > 0
-                    ? 'Everything in this scan has been reviewed. Tap Back to home to check another folder.'
+                    ? 'Everything in this scan has been reviewed. Tap Home to scan another folder.'
                     : bestShots
                     ? 'No similar photo groups found. PictoIQ groups visually alike shots taken close together and ranks face quality when faces are detected.'
                     : 'No exact duplicate photos found. Exact duplicates have identical file contents.',
@@ -3878,11 +4106,28 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              _moments
-                  ? 'Tap a photo to enlarge it · the top moment is selected; tap the circle on the other photo to choose it instead'
-                  : 'Tap a photo to enlarge it · tap its circle to keep that one',
-              style: const TextStyle(fontSize: 12, color: AppColors.hint),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _moments
+                      ? 'Tap a photo to enlarge it. Tap the circle to pick a different one, or ⓘ to see why it was chosen.'
+                      : 'Tap a photo to enlarge it. Tap its circle to keep that one, or ⓘ to see why it was chosen.',
+                  style: const TextStyle(fontSize: 12, color: AppColors.hint),
+                ),
+                if (bestShots &&
+                    _picksToShare(groups).length > AppLimits.shareMaxPhotos)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      'Share and Create reel use up to ${AppLimits.shareMaxPhotos} photos at a time. You choose which ones on the next screen.',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.hint,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -3996,7 +4241,7 @@ class _LibraryPageState extends State<LibraryPage> {
               ? 'All done. Nothing left to review in this scan.'
               : _noGroupsText(scan, bestShots: bestShots))
         : !bestShots
-        ? 'Exact copies. Review before deleting.'
+        ? 'Exact photos: identical copies. Review before deleting.'
         : _moments
         ? 'Best moments are selected. Nothing is deleted from this list.'
         : ready.isEmpty
@@ -4032,10 +4277,10 @@ class _LibraryPageState extends State<LibraryPage> {
     final headline = groups == 0
         ? (_freedBytes > 0 ? 'All done' : 'Nothing found')
         : _moments
-        ? '$groups moments found'
+        ? '$groups ${groups == 1 ? 'moment' : 'moments'} found'
         : bestShots
-        ? '$groups similar groups found'
-        : '$groups duplicate groups found';
+        ? '$groups similar ${groups == 1 ? 'group' : 'groups'} found'
+        : '$groups duplicate ${groups == 1 ? 'group' : 'groups'} found';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -4138,16 +4383,31 @@ class _LibraryPageState extends State<LibraryPage> {
               runSpacing: 4,
               children: _moments
                   ? [
-                      stat('${_momentEventCount(scan)}', 'events'),
-                      stat('$groups', 'moments'),
+                      stat(
+                        '${_momentEventCount(scan)}',
+                        _momentEventCount(scan) == 1 ? 'event' : 'events',
+                      ),
+                      stat('$groups', groups == 1 ? 'moment' : 'moments'),
                       stat(
                         '${scan.duplicateGroups.fold<int>(0, (total, group) => total + _momentPair(group).length)}',
-                        'photos picked',
+                        scan.duplicateGroups.fold<int>(
+                                  0,
+                                  (total, group) =>
+                                      total + _momentPair(group).length,
+                                ) ==
+                                1
+                            ? 'photo picked'
+                            : 'photos picked',
                       ),
                     ]
                   : [
                       stat(_formatBytes(potentialBytes), 'can be freed'),
-                      stat('${potential.length}', 'photos to remove'),
+                      stat(
+                        '${potential.length}',
+                        potential.length == 1
+                            ? 'photo to remove'
+                            : 'photos to remove',
+                      ),
                     ],
             ),
           ],
@@ -4230,7 +4490,7 @@ class _LibraryPageState extends State<LibraryPage> {
       ? SettingsCategory.bestShot
       : SettingsCategory.duplicates;
 
-  /// The collapsible "Change Filter" panel above the results. What was
+  /// The collapsible "Change filter" panel above the results. What was
   /// scanned is in the "found" section below it.
   Widget _scopeStrip(
     FolderScanResult scan, {
@@ -4261,7 +4521,7 @@ class _LibraryPageState extends State<LibraryPage> {
       content: SingleChildScrollView(
         child: Text(
           [
-            'Scanned ${scan.imagesScanned} images · ${scan.duplicateGroups.length} $groupLabel · ${scan.rangeDescription}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
+            'Scanned ${scan.imagesScanned} photos · ${scan.duplicateGroups.length} $groupLabel · ${scan.rangeDescription}${_skippedNote(scan.imagesSkipped)}${_documentNote(scan)}',
             if (bestShots && scan.duplicateGroups.isNotEmpty)
               _reviewNoteText(scan),
             'Space figures assume you keep only the top pick (or your pick) in each group.',
@@ -4435,10 +4695,6 @@ class _LibraryPageState extends State<LibraryPage> {
                 title: item.relativePath,
                 preview: item.previewBytes,
                 loadLarge: () => _folderScanner.loadLargePreview(item.uri),
-                details: explainPhoto(item),
-                isPrivate: _privatePhotos.contains(item.uri),
-                onPrivateChanged: (value) =>
-                    _privatePhotos.setPrivate(item.uri, value),
               ),
           ],
         ),
@@ -4465,7 +4721,9 @@ class _LibraryPageState extends State<LibraryPage> {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        evidence.isSession
+        evidence.size == 1
+            ? 'Single photo'
+            : evidence.isSession
             ? 'Same session'
             : switch (evidence.confidence) {
                 SimilarityConfidence.high => 'Same shot',
@@ -4552,7 +4810,9 @@ class _LibraryPageState extends State<LibraryPage> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8, left: 2),
                     child: Text(
-                      'Selected from ${group.photos.length} photos in this moment',
+                      group.photos.length == 1
+                          ? 'The only photo of this moment'
+                          : 'Selected from ${group.photos.length} photos in this moment',
                       style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -4816,7 +5076,9 @@ class _LibraryPageState extends State<LibraryPage> {
                         Expanded(
                           child: Text(
                             group.ranking?.headline ??
-                                '${group.photos.length} similar photos',
+                                (group.photos.length == 1
+                                    ? 'A clearly good photo on its own'
+                                    : '${group.photos.length} similar photos'),
                             style: const TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w700,
@@ -5022,6 +5284,7 @@ class _LibraryPageState extends State<LibraryPage> {
   }) {
     final small = width < 120;
     final selected = keepIds.contains(photo.uri);
+    final locked = _isLocked(photo.uri);
     final preview = photo.previewBytes;
     final momentRank = _moments
         ? _momentPair(group).indexWhere((p) => p.uri == photo.uri)
@@ -5064,14 +5327,113 @@ class _LibraryPageState extends State<LibraryPage> {
                           color: Color(0xFFF0F1EC),
                           child: Icon(Icons.image_not_supported_outlined),
                         )
-                      : Image.memory(
-                          preview,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => const ColoredBox(
-                            color: Color(0xFFF0F1EC),
-                            child: Icon(Icons.broken_image_outlined),
-                          ),
+                      : (locked
+                            ? ImageFiltered(
+                                imageFilter: ImageFilter.blur(
+                                  sigmaX: 12,
+                                  sigmaY: 12,
+                                ),
+                                child: Image.memory(
+                                  preview,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => const ColoredBox(
+                                    color: Color(0xFFF0F1EC),
+                                    child: Icon(Icons.broken_image_outlined),
+                                  ),
+                                ),
+                              )
+                            : Image.memory(
+                                preview,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => const ColoredBox(
+                                  color: Color(0xFFF0F1EC),
+                                  child: Icon(Icons.broken_image_outlined),
+                                ),
+                              )),
+                ),
+              ),
+            ),
+            if (locked)
+              IgnorePointer(
+                child: Center(
+                  child: Transform.rotate(
+                    angle: -0.5,
+                    child: Text(
+                      'PRIVATE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: small ? 14 : 20,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 2,
+                        shadows: const [
+                          Shadow(blurRadius: 6, color: Color(0xCC000000)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (locked)
+              Positioned(
+                right: small ? 36 : 44,
+                top: 0,
+                child: InkResponse(
+                  onTap: () => _showMessage(
+                    _privatePhotos.contains(photo.uri)
+                        ? 'You marked this photo private. It is blurred and will not be shared or put in a reel.'
+                        : 'PictoIQ found that this photo may be sensitive. It was checked on your phone only. It is blurred and will not be shared or put in a reel.',
+                  ),
+                  radius: 22,
+                  child: SizedBox(
+                    width: small ? 36 : 44,
+                    height: small ? 36 : 44,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: const BoxDecoration(
+                          color: Color(0xE6FFFFFF),
+                          shape: BoxShape.circle,
                         ),
+                        child: const Icon(
+                          Icons.lock_outline,
+                          size: 18,
+                          color: Color(0xFF7A1F1F),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Positioned(
+              right: 0,
+              top: 0,
+              child: InkResponse(
+                onTap: () => showPhotoDetails(
+                  context,
+                  photo.relativePath,
+                  explainPhoto(photo),
+                ),
+                radius: 22,
+                child: Tooltip(
+                  message: 'Why is this here?',
+                  child: SizedBox(
+                    width: small ? 36 : 44,
+                    height: small ? 36 : 44,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: const BoxDecoration(
+                          color: Color(0xE6FFFFFF),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.info_outline,
+                          size: 18,
+                          color: AppColors.body,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -5256,7 +5618,9 @@ class _LibraryPageState extends State<LibraryPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'Details · ${group.photos.length} similar photos',
+                  group.photos.length == 1
+                      ? 'Details · single photo'
+                      : 'Details · ${group.photos.length} similar photos',
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -5447,7 +5811,7 @@ class _LibraryPageState extends State<LibraryPage> {
               style: const TextStyle(fontSize: 11, color: Color(0xFF85877F)),
             ),
           const SizedBox(height: 6),
-          if (group.evidence != null)
+          if (group.evidence != null && group.photos.length > 1)
             SizedBox(
               width: double.infinity,
               child: TextButton(
@@ -5689,10 +6053,41 @@ class _LibraryPageState extends State<LibraryPage> {
     builder: (context) => AlertDialog(
       icon: const Icon(Icons.shield_outlined, color: _green),
       title: const Text('Your photos stay on this device.'),
-      content: const Text(
-        'PictoIQ uses the system photo picker. It copies only the photos you choose into private app storage, then calculates fingerprints on your device. There are no accounts or uploads. Removing a photo from PictoIQ deletes its private copy, not the original in your gallery.',
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'PictoIQ looks at the photos on your phone to find the best shots and moments. Everything is worked out on your device. There are no accounts, no ads and no uploads.\n\n'
+              'Nothing is shared until you choose to. Before photos are shared or made into a reel, you see them on a preview screen where you can remove any photo.',
+            ),
+            const SizedBox(height: 16),
+            FutureBuilder<String>(
+              future: appVersionLabel(),
+              builder: (context, snapshot) => Text(
+                snapshot.data ?? 'Version …',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(AppInfo.copyright, style: TextStyle(fontSize: 12)),
+            const Text(
+              'Questions: ${AppInfo.contactEmail}',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
       ),
       actions: [
+        TextButton(
+          onPressed: () => showLicensePage(
+            context: context,
+            applicationName: AppInfo.name,
+            applicationLegalese: AppInfo.copyright,
+          ),
+          child: const Text('Open-source licences'),
+        ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Got it'),
@@ -5709,7 +6104,7 @@ String _noGroupsText(FolderScanResult scan, {required bool bestShots}) {
     return 'No image files were found in "${scan.folderName}". Choose the folder that directly holds your photos, for example DCIM > Camera.${_skippedNote(scan.imagesSkipped)}';
   }
   if (scan.imagesScanned == 0 && scan.imagesOutsideDateRange > 0) {
-    return 'Found ${scan.imagesOutsideDateRange} photos in "${scan.folderName}", but none from ${scan.rangeDescription}. Tap New scan and choose Last 30 days or Current folder.${_skippedNote(scan.imagesSkipped)}';
+    return 'Found ${scan.imagesOutsideDateRange} photos in "${scan.folderName}", but none from ${scan.rangeDescription}. Tap Home and choose All dates or a longer date range.${_skippedNote(scan.imagesSkipped)}';
   }
   final what = bestShots
       ? 'No similar shots found.'

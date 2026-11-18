@@ -182,4 +182,14 @@ void main() {
     expect(changed.useFaceSignals, isFalse);
     expect(changed.groupSessions, isTrue);
   });
+
+  test('an old saved "All photos" moves to the new default once', () {
+    final old = AppSettings.fromJson({'contentFilter': 'everything'});
+    expect(old.contentFilter, ContentFilter.peopleAndScenery);
+
+    final chosen = AppSettings.fromJson(
+      const AppSettings(contentFilter: ContentFilter.everything).toJson(),
+    );
+    expect(chosen.contentFilter, ContentFilter.everything);
+  });
 }

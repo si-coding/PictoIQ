@@ -16,6 +16,9 @@ List<String> explainPhoto(FolderScanPhoto photo) {
   final features = photo.features;
   if (features == null) return lines;
 
+  for (final note in features.notes) {
+    lines.add(note);
+  }
   final faces = features.faces;
   if (faces == null) {
     lines.add('People: faces were not checked for this photo.');

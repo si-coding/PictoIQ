@@ -60,7 +60,7 @@ File moves only: no class was renamed or changed. `features/photos/library/` and
 
 ## Video status
 
-The home screen has a Photos | Videos switch with four video tiles. **Exact Duplicates is built** (`features/videos/duplicates/`); the other three are "Coming soon". Under `core/video/`, `core/media/` and `features/videos/domain/models` there are still only interfaces and one model. Build order:
+The home screen has a Photos | Videos switch with four video tiles. **Exact videos is built** (`features/videos/duplicates/`); the other three are "Coming soon". Under `core/video/`, `core/media/` and `features/videos/domain/models` there are still only interfaces and one model. Build order:
 
 1. Exact duplicate videos (file fingerprints only; no frames). **Done.** `video_duplicates.dart` lists video albums with `photo_manager`, narrows candidates to videos with the same length and picture size, then streams a SHA-256 of only those and groups identical size+hash. `video_duplicates_page.dart` is the review screen. Logic is tested in `test/video_duplicates_test.dart`. Reading a video through `photo_manager` can make a temporary copy on Android 10+, so the scan clears that cache afterwards. Videos in a folder picked with Android's folder picker (SAF) are supported too: they are matched by file size, hashed from the SAF stream, shown without thumbnails and deleted through SAF. `features/videos/library/video_album_picker_page.dart` is the album picker (tapping an album opens `video_album_contents_page.dart`, a scrollable grid with lengths, and `video_player_page.dart` plays a video) (cover and count per album, "Other folder…", and messages for denied, limited or empty access).
 2. Video list and player.
@@ -136,7 +136,7 @@ is gone (the stored `momentShowScenes` value is still honoured).
 
 The "N moments found" section holds the ⋮ menu (view scanned files, about this
 scan) and the scan's facts as plain text (folder and dates, photos scanned, the
-settings used). Below it, "Change Filter" is a single collapsible panel
+settings used). Below it, "Change filter" is a single collapsible panel
 (`ScanScopeCard(showScanDetails: false)`). When new results appear, the page
 glides down to the first photos (`_scrollToResults`).
 
@@ -158,21 +158,28 @@ Privacy are also in the ⋮ menu. Scans analyse several photos at once
 (`defaultScanConcurrency`: 3 to 6 by CPU cores). Long result lists have a draggable scroll bar
 and a back-to-top button (`_withScrollAids` in `main.dart`).
 
-### Sensitive pictures are never shared
+### Sensitive pictures
 
-Before anything is shared or put in a reel (`_screenForSharing` in `main.dart`),
-`screenForSharing` (`features/photos/share/share_guard.dart`) removes photos the
-person marked private (the lock button in the photo viewer, stored on the phone
-by `PrivatePhotoStore`) and photos a `SensitiveContentDetector` scores at or
-above `sensitiveThreshold`. The person is warned, can review those photos, and
-can carry on without them.
+There is no automatic sensitive-picture check in this release (see
+"Sensitive-picture check" below). Before anything is shared or put in a reel
+(`_screenForSharing` in `main.dart`), `screenForSharing`
+(`features/photos/share/share_guard.dart`) removes photos in `PrivatePhotoStore`
+(marks already saved on the phone; the enlarged-photo viewer in scan results no
+longer has a lock button, so nothing new is marked there) and photos a
+`SensitiveContentDetector` scores at or above `sensitiveThreshold`. The current
+detector is `NoSensitiveDetector`, so only stored private marks apply. The share
+and reel preview screens let the person remove any photo before it is sent. In
+scan results each thumbnail has an info button (top right) that opens the "Why
+is this here?" panel; the enlarged photo has none.
 
-Automatic detection needs its own model: ML Kit's default labeller has no
-nudity or underwear labels (its label map only has Swimwear, Skin, Trunk and
-Muscle). The app uses `OnDeviceSensitiveDetector` (see "Sensitive-picture
-check" below) at `_sensitiveDetector` in `main.dart`, and `NoSensitiveDetector`
-is the do-nothing fallback. Illegal material cannot be recognised on the phone; the warning tells the
-person not to pass it on and to report it.
+### Lone photos
+
+A photo with nothing similar to it becomes a group of one when it is clearly
+good (`isClearlyGood` in `shared/shot_ranking.dart`: sharp, well exposed, and
+for a person open eyes, nothing cut off, in focus, facing the camera). It
+passes the same filters as other photos. The minimum sharpness is
+`loneShotMinSharpness` (60, untuned). Such groups show a "Single photo" chip and
+are listed after groups of two or more when sharing.
 
 ### Same moment, people in different places
 
@@ -195,10 +202,31 @@ the same. The old "Maximum photos in a reel" setting was removed.
 
 ### Sensitive-picture check
 
-`lib/shared/on_device_sensitive_detector.dart` wraps the `flutter_nsfw_detector`
-package (MIT, a 17 MB MobileNet-style model bundled in its Android assets, run
-by LiteRT 1.4.2; no network code). `screenForSharing` scores each photo and
-blocks those at or above `sensitiveThreshold` (0.6). If the model cannot load,
-the detector reports itself unavailable and only private marks apply. The
-package comes from an unverified publisher and the model's own licence is not
-stated: both are release checks (see the Play checklist).
+There is no automatic detector in the app. `flutter_nsfw_detector` 0.0.5 was
+tried and removed: its model returns 5 values per picture but the plugin reads
+2 (`PlatformException(SCAN_FAILED, Cannot copy from a TensorFlowLite tensor
+(Identity) with shape [1, 5] to a Java object with shape [1, 2]`). Only photos
+the person marks private are kept out of shares and reels. The scanner already
+accepts a `sensitiveScorer` and the results lock and blur photos scoring at or
+above `sensitiveThreshold`, so a working detector that implements
+`SensitiveContentDetector` can be put at `_sensitiveDetector` in `main.dart`.
+
+## Screen text conventions
+
+Tool names use sentence case: Best moments, Best shots, Exact photos, Clutter;
+videos: Exact videos, Similar videos, Video best moments, Video enhance. The
+settings panel above results is "Change filter". Counts are pluralised (1
+moment, 2 moments). Error text shown to people is plain; technical detail
+(`runtimeType`, stack) is only printed with `debugPrint`, or shown in the album
+picker in debug builds only. In scan results each thumbnail has an info button
+(top right, 44 dp tap area).
+
+Home screen (photos): header with the logo; "Your photo library" totals (shown
+once photo access is granted, so after the first scan or earlier if already
+granted) with a shield-tick line "100% - Your photos stay on your device"; then
+"Choose a photo tool, and discover your photo library effortlessly." with a
+sparkle; four tool cards (Best moments, Exact photos, Best shots, Gallery
+cleanup; the label chips are pinned to the bottom of the card so they line up);
+and a philosophy card ("The Best moments deserve to be cherished forever.").
+The Videos tab keeps its own headline. The fourth tool, "Gallery cleanup", is
+the clutter scan; its button reads "Find unwanted photos".

@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import 'package:pictoiq_mobile/shared/app_menu_button.dart';
@@ -182,7 +183,7 @@ class _VideoAlbumPickerPageState extends State<VideoAlbumPickerPage> {
       _Status.failed => _message(
         icon: Icons.error_outline,
         text:
-            'Your video albums could not be loaded right now.${_error == null ? '' : '\n\n$_error'}',
+            'Your video albums could not be loaded right now.${_error == null || !kDebugMode ? '' : '\n\n$_error'}',
         actions: [
           FilledButton(onPressed: _load, child: const Text('Try again')),
           TextButton(

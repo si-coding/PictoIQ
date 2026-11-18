@@ -22,7 +22,7 @@ flutter clean
 flutter pub get
 flutter analyze
 flutter test
-flutter build appbundle --release
+flutter build appbundle --release --obfuscate --split-debug-info=build/symbols
 ```
 
 Output: `build/app/outputs/bundle/release/app-release.aab`.
@@ -68,9 +68,18 @@ Organisation accounts (with a D-U-N-S number) skip the 12-tester rule.
 - The listing says photos stay on the device. Do not add analytics, ads or uploads without updating the privacy policy and the Data safety form first.
 - If you re-enable the Library tab (copies photos into the app's private storage) or add anything that stores or sends data, update the policy and the form.
 
-- **Content filter.** Best moments, Best shots and Exact duplicates share the "Change Filter" settings (People, Scenery, documents and screenshots; People and scenery is the default). Scan a folder that has screenshots, documents, food, slides and photos where people are blurred, and confirm they are left out or listed under Clutter. Tune the label lists in `lib/shared/photo_content.dart` and the unclear-people limits in `lib/features/photos/clutter/clutter_classifier.dart` on real photos; use the "Why is this here?" button to see why a photo was judged.
+- **Content filter.** Best moments, Best shots and Exact duplicates share the "Change filter" settings (People, Scenery, documents and screenshots; People and scenery is the default). Scan a folder that has screenshots, documents, food, slides and photos where people are blurred, and confirm they are left out or listed under Clutter. Tune the label lists in `lib/shared/photo_content.dart` and the unclear-people limits in `lib/features/photos/clutter/clutter_classifier.dart` on real photos; use the "Why is this here?" button to see why a photo was judged.
 - **Footer and menu.** Home shows Photos, Settings and Privacy. The results screen shows only Share and Create reel (Home is in the top bar). Check Settings and Privacy are also in the three-dot menu on every other screen.
 - **Owner limits.** `lib/core/config/app_limits.dart` sets 9 photos to share, 9 in a reel and 500 photos per scan. They are not in Settings. Change them there before a release if you want different numbers, and update the listing text that says 9 and 500.
-- **Sensitive photos.** Before sharing or making a reel, `OnDeviceSensitiveDetector` (`flutter_nsfw_detector`, a 17 MB bundled model run by LiteRT) scores each photo, and the app warns and leaves out any scoring 0.6 or more (`sensitiveThreshold` in `lib/shared/sensitive_content.dart`; lower it to catch more, raise it for fewer false alarms). Marking a photo private (lock button in the viewer) also blocks it. Test on a real phone with harmless borderline pictures (beach, swimwear, sports) and tune the threshold. The check can miss pictures and cannot detect illegal content, so keep the listing wording as it is. After `flutter pub get`, build a release bundle and check: the app size (about 17 MB larger), the 16 KB alignment of the new LiteRT native libraries (`zipalign -P 16`), and that the check still works in the release build (R8 can remove classes; if it fails only in release, add keep rules for `org.tensorflow.lite.**` and `com.google.ai.edge.litert.**`). The model's own licence is not stated by its publisher: ask them, or check `flutter_nsfw_detector` on GitHub, before releasing.
+- **Sensitive photos.** There is no automatic sensitive-picture check in this release (`flutter_nsfw_detector` was removed because its model did not work), and the enlarged-photo viewer in scan results no longer has a lock (private) button. The person reviews photos on the share and reel preview screens and can remove any. The listing and privacy policy say so; do not claim automatic detection or private marks. A working detector can be added later at `_sensitiveDetector` in `lib/main.dart`.
 - **Free storage figure.** It uses a small Android call (`StatFs`, no permission). Check it shows on a real phone and that its absence does not break the home screen.
 - **Launch screen.** `res/drawable-nodpi/pictoiq_splash.png` (logo only) is the pre-Android 12 launch image; `values-v31` and `values-night-v31` style the Android 12+ system splash (icon only). The animated wordmark is drawn by the app itself (`lib/features/splash/splash_page.dart`, same background colour and logo size), so it looks the same on every Android version. Reinstall after changing the native files, because Android caches launch screens.
+
+## Version, copyright and contact
+
+- **Version and build number.** The `version:` line in `pubspec.yaml` (now `1.0.0+1`: version 1.0.0, build 1). Every Play upload needs a higher build number than the last, even for the same version, so raise the number after the `+` each time. The app shows both in Privacy.
+- **Copyright.** See `docs/copyright-and-protection.md`; `LICENSE`, the notice in the Privacy dialog and the Open-source licences page are in the app. Edit `lib/core/config/app_info.dart` to change the owner name or contact email.
+- **Contact email.** pictoiq@gmail.com in the privacy policy, the app and the store listing (Play Console, Store settings > Store listing contact details).
+- **Installing for tests.** Install the normal APK (`flutter build apk --release --split-per-abi`, then the arm64 one) on a phone. The `.aab` cannot be installed directly; it is only uploaded to Play.
+
+- **Release build and ML Kit.** Release builds shrink Android code (R8). `android/app/proguard-rules.pro` keeps the ML Kit classes. Always test the face check and the object filter in a **release** build: open a photo, tap the info button, and make sure no line says a check "failed". If one does, the line shows the error.

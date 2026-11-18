@@ -1,6 +1,6 @@
 # PictoIQ Privacy Policy
 
-Last updated: 16 November 2026
+Last updated: 17 November 2026
 
 PictoIQ ("the app") helps you find your best photos and moments, remove exact duplicate photos, clear out clutter such as screenshots, and make short photo reels to share, on your own phone. This policy explains what the app does with your information.
 
@@ -26,9 +26,9 @@ PictoIQ ("the app") helps you find your best photos and moments, remove exact du
 - If you add music, you choose an audio file with Android's file picker. PictoIQ copies it to its private cache for the length of the job and removes it afterwards. PictoIQ does not use the microphone and does not ask for audio permissions.
 - The finished reel and the copies of the photos made for sharing are kept in the app's temporary cache and replaced the next time you make one. Clearing the app's storage in Android settings removes them.
 
-## Private photos
+## Sharing
 
-You can mark a photo as private in the photo viewer. PictoIQ never shares a private photo or puts it in a reel, and warns you if one is included. The app remembers which photos you marked (by their location on your phone, not the photo itself) in a small file on your device. It is not sent anywhere. Before you share photos or make a reel, PictoIQ also checks them on your phone with a small model built into the app, to catch pictures that look sexual or nude. Those pictures are not shared and you are warned. The check happens entirely on your device, and the pictures are not sent anywhere. No check is perfect: it can miss some pictures and flag harmless ones, so please look at what you share.
+PictoIQ does not share anything on its own. Before photos are shared or made into a reel, you see them on a preview screen where you can remove any photo. PictoIQ does not automatically check your photos for sensitive content, so please look at what you share.
 
 ## Scan size
 
@@ -36,7 +36,7 @@ One scan looks at up to 500 photos (the newest ones in the album and date range 
 
 ## Information stored on your device
 
-The app saves your settings (for example the match level you picked, or whether Best shot keeps one photo or several) and your list of private photos on your device. Nothing else is saved between scans. Clearing the app's storage in Android settings removes them.
+The app saves your settings (for example the match level you picked, or whether Best shot keeps one photo or several) on your device. Nothing else is saved between scans. Clearing the app's storage in Android settings removes them.
 
 ## Information sent to Google by ML Kit
 

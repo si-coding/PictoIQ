@@ -390,7 +390,7 @@ enum TimeMode {
 enum ContentFilter {
   everything(
     'All photos',
-    'Every photo is considered, whatever it shows.',
+    'Nothing is left out: objects, screens and screenshots can appear in the results. Switch on People and/or Scenery to leave them out.',
   ),
   peopleAndScenery(
     'People and scenery only',
@@ -819,6 +819,9 @@ class SimilarityEvidence {
 
   /// Plain-language facts behind the confidence level, for the UI.
   List<String> get notes {
+    if (size == 1) {
+      return const ['Only photo of its kind; nothing similar to compare with'];
+    }
     if (byContent) {
       final layout = maxLayoutDistance;
       return [

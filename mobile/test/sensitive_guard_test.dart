@@ -46,6 +46,29 @@ Future<Uint8List?> _bytesOf(String uri) async =>
 
 void main() {
   group('screenForSharing', () {
+    test('a photo already scored is not checked again', () async {
+      final detector = _FakeDetector({'a.jpg': 0.1, 'b.jpg': 0.9});
+      final cache = <String, double>{};
+      final first = await screenForSharing(
+        [_photo('a.jpg'), _photo('b.jpg')],
+        markedPrivate: const {},
+        detector: detector,
+        loadBytes: _bytesOf,
+        cache: cache,
+      );
+      expect(first.blocked.map((p) => p.name), ['b.jpg']);
+      expect(cache.length, 2);
+      final second = await screenForSharing(
+        [_photo('a.jpg'), _photo('b.jpg')],
+        markedPrivate: const {},
+        detector: detector,
+        loadBytes: _bytesOf,
+        cache: cache,
+      );
+      expect(second.blocked.map((p) => p.name), ['b.jpg']);
+      expect(detector.checked, ['a.jpg', 'b.jpg']);
+    });
+
     test('photos marked private are blocked without being checked', () async {
       final detector = _FakeDetector({'ok.jpg': 0.0});
       final result = await screenForSharing(
