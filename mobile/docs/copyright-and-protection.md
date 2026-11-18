@@ -7,7 +7,7 @@ Property Office of New Zealand) about anything important, such as a trademark.
 
 - **Copyright is automatic.** The code, text, layout and graphics you create are
   yours the moment they are written; no registration is needed in New Zealand
-  or most countries. The notice (`© 2026 Raj Kumar. All rights reserved.`) is
+  or most countries. The notice (`© 2026 PictoIQ. All rights reserved.`) is
   not required, but it removes any excuse. It is in `LICENSE`, in the app
   (Privacy dialog) and in `lib/core/config/app_info.dart`.
 - Parts you did not write keep their own licences (Flutter, ML Kit, the

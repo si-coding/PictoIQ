@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/library/album_contents_page.dart';
@@ -130,14 +129,41 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
   Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
       automaticallyImplyLeading: false,
-      title: const Text('Choose an album'),
-      actions: [
-        TextButton(onPressed: _otherFolder, child: const Text('Other folder…')),
-        const AppHomeButton(),
-        const AppMenuButton(),
+      leading: const AppBackButton(),
+      leadingWidth: appBackButtonWidth,
+      centerTitle: true,
+      title: const Text(
+        'Choose an album',
+        style: TextStyle(
+          fontSize: 21,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -.2,
+          color: AppColors.ink,
+        ),
+      ),
+    ),
+    body: Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _otherFolder,
+              icon: const Icon(Icons.folder_open_outlined, size: 20),
+              label: const Text(
+                'Other folder…',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ),
+        ),
+        Expanded(child: _albumBody()),
       ],
     ),
-    body: switch (_status) {
+  );
+
+  Widget _albumBody() => switch (_status) {
       _Status.loading => const Center(child: CircularProgressIndicator()),
       _Status.denied => _message(
         icon: Icons.lock_outline,
@@ -178,8 +204,7 @@ class _AlbumPickerPageState extends State<AlbumPickerPage> {
         ],
       ),
       _Status.ready => _grid(),
-    },
-  );
+    };
 
   Widget _message({
     required IconData icon,

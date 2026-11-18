@@ -11,8 +11,6 @@ void main() {
   testWidgets('configuration keeps date range above album preview and scan', (
     tester,
   ) async {
-    var settingsOpened = false;
-    var privacyOpened = false;
     final folder = FolderSelection(
       uri: 'media:camera',
       name: 'Camera',
@@ -36,8 +34,8 @@ void main() {
           loadVideoGallery: (_) async => const <VideoPreview>[],
           scanEnabled: true,
           scanLabel: 'Find Best Moments',
-          onSettings: () => settingsOpened = true,
-          onPrivacy: () => privacyOpened = true,
+          onSettings: () {},
+          onPrivacy: () {},
           onScan: () async => false,
           onCancelScan: () {},
           scanProgressRevision: ValueNotifier(0),
@@ -49,7 +47,8 @@ void main() {
 
     expect(find.text('1. Choose a date range'), findsOneWidget);
     expect(find.text('Best Moments'), findsOneWidget);
-    expect(find.byTooltip('Menu'), findsOneWidget);
+    expect(find.byTooltip('Back'), findsOneWidget);
+    expect(find.byTooltip('Menu'), findsNothing);
     expect(find.text('2. Browse your album or folder'), findsOneWidget);
     expect(find.text('3. Album preview · 1 recent item'), findsOneWidget);
     expect(find.text('Find Best Moments'), findsOneWidget);
@@ -59,16 +58,6 @@ void main() {
         tester.getTopLeft(find.text('3. Album preview · 1 recent item')).dy,
       ),
     );
-    await tester.tap(find.byTooltip('Menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
-    expect(settingsOpened, isTrue);
-    await tester.tap(find.byTooltip('Menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Privacy'));
-    await tester.pumpAndSettle();
-    expect(privacyOpened, isTrue);
   });
 
   testWidgets('scan stays disabled until an album or folder is chosen', (

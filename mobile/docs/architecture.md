@@ -38,7 +38,7 @@ The scan-finished popup is queued by `_showResultPopup` and opened by `_flushPop
 
 The results screen is a stack of white cards: a summary card (headline, numbers, Clean up all / Review all), the share card, a scope strip (folder, date range, photos scanned, scan menu) right above the group cards. The documents setting leaves out pages of text and files named like screenshots (`looksLikeScreenshotFile`); photos of a screen or slide cannot be told from other photos without an object-recognition model.
 
-The "which photos to include" setting (`ContentFilter`) runs ML Kit image labelling (`_labelContent` in the folder scanner) only on photos with no faces, and `isPeopleOrScenery` in `shared/photo_content.dart` decides what is left out. Unknown or failed labelling keeps the photo. A face only counts when it fills at least 0.2% of the picture (`prominentFaceArea`), so a distant presenter does not turn a photo of a slide into a people photo, and the labeller's people/scenery labels must be about as sure as its screen/object labels. Clutter has a "Screens & objects" kind (`ClutterKind.screenOrObject`) that uses the same labels. Every screen except Home has the three-dot `AppMenuButton` (Settings, Privacy); Home registers its actions in `AppMenuActions`.
+The "which photos to include" setting (`ContentFilter`) runs ML Kit image labelling (`_labelContent` in the folder scanner) only on photos with no faces, and `isPeopleOrScenery` in `shared/photo_content.dart` decides what is left out. Unknown or failed labelling keeps the photo. A face only counts when it fills at least 0.2% of the picture (`prominentFaceArea`), so a distant presenter does not turn a photo of a slide into a people photo, and the labeller's people/scenery labels must be about as sure as its screen/object labels. Clutter has a "Screens & objects" kind (`ClutterKind.screenOrObject`) that uses the same labels. Home, the Find screens, Choose an album and the results screens have no three-dot menu; Settings and Privacy are reached from Home (`AppMenuActions`).
 
 Rules: `core/` and `shared/` never import `features/`. Imports use `package:pictoiq_mobile/...`.
 
@@ -75,7 +75,7 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact vide
 
 `features/settings/category_settings.dart` holds the controls for each tool (`SettingsCategory`, `settingsChildrenFor`) so the same widgets are used by the Settings page, by a tool's Find screen (`ScanConfigurationPage.settingsPanel`, collapsible, above the date range) and above results (`CollapsiblePanel` in the scope strip of the similar-photo results, and in `ClutterPage` / `VideoDuplicatesPage` via `settingsPanel`). Every change goes through `_updateSettings`, so it is saved at once and used by the next Find. Result screens also have a search icon (`onFind`) that opens the tool's Find screen. Scan buttons are labelled "Find …". Tested in `test/category_settings_test.dart`.
 
-Browse and results screens have no back arrow: `AppHomeButton` (shared/app_back_button.dart) sits left of the ⋮ menu and returns to the home screen (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
+Browse, Choose an album and results screens have a round back arrow at the top left (`AppBackButton`, shared/app_back_button.dart) and a centred title. On the results screens the back arrow opens the tool's Find screen again (`_backToBrowse`; Gallery cleanup uses `onFind`) and the search icon at the top right does the same; Share, Create reel and the review screens have a Home icon at the top right instead of a menu. Until PictoIQ can see the photos, Home shows a "Your memories are waiting." banner (`_howItWorks`) in place of the library numbers, and the privacy line sits below it (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
 
 After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard`: a two-line header (folder · short range, counts), the filters as chips, and a "Filters" control that opens the scan's facts and the editable filters; after a filter differs from the one used for the scan it offers "Find again with these filters" (opens the Find screen). The Find screens' filter panel is titled "Update … Filter" with its chevron at the right. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
 
@@ -134,7 +134,7 @@ is gone (the stored `momentShowScenes` value is still honoured).
 
 ### Results page layout
 
-The "N moments found" section holds the ⋮ menu (view scanned files, about this
+The "N best moments found" section holds a small ⋮ menu (view scanned files, about this
 scan) and the scan's facts as plain text (folder and dates, photos scanned, the
 settings used). Below it, "Change filter" is a single collapsible panel
 (`ScanScopeCard(showScanDetails: false)`). When new results appear, the page
@@ -151,10 +151,9 @@ leaves the phone.
 
 The bottom bar depends on the screen. On the results screen it is just Share and
 Create reel, in bold forest green (the top bar has Home), and there is no separate
-"Share your memories" card on the page. On the home screen it is Photos, Videos (when
-enabled), Settings and Privacy. While a reel is made, Cancel reel sits under
-the progress bar, as Cancel scan does under the scan progress. Settings and
-Privacy are also in the ⋮ menu. Scans analyse several photos at once
+"Share your memories" card on the page. On the home screen it is a light Photos / Videos switch when videos are on, and there is no footer when they are off; Settings and Privacy are in the menu at the top right of
+the home header (`_homeMenu`). The Share screen shows the photos in the same large two-column preview grid as Create reel (long-press and drag to reorder, ✕ to remove), and both screens have a draggable scroll bar and a Back to top button (`ScrollWithTopButton`). While a reel is made, Cancel reel sits under
+the progress bar, as Cancel scan does under the scan progress. Scans analyse several photos at once
 (`defaultScanConcurrency`: 3 to 6 by CPU cores). Long result lists have a draggable scroll bar
 and a back-to-top button (`_withScrollAids` in `main.dart`).
 
@@ -223,9 +222,9 @@ picker in debug builds only. In scan results each thumbnail has an info button
 
 Home screen (photos): header with the logo; "Your photo library" totals (shown
 once photo access is granted, so after the first scan or earlier if already
-granted) with a shield-tick line "100% - Your photos stay on your device"; then
-"Choose a photo tool, and discover your photo library effortlessly." with a
-sparkle; four tool cards (Best moments, Exact photos, Best shots, Gallery
+granted; until then a drawn "Your memories are waiting." welcome banner) and a
+small shield-tick line "100% - Your photos stay on your device"; then
+"Explore & Create" with a sparkle; four tool cards (Best moments, Exact photos, Best shots, Gallery
 cleanup; the label chips are pinned to the bottom of the card so they line up);
 and a philosophy card ("The Best moments deserve to be cherished forever.").
 The Videos tab keeps its own headline. The fourth tool, "Gallery cleanup", is

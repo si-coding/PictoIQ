@@ -2,7 +2,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
@@ -227,7 +226,7 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
       appBar: AppBar(
         leading: const AppBackButton(),
         leadingWidth: appBackButtonWidth,
-        actions: const [AppMenuButton()],
+        actions: const [AppHomeButton()],
         title: const Text('Scanned files'),
       ),
       body: CustomScrollView(

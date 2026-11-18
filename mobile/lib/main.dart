@@ -19,7 +19,6 @@ import 'package:pictoiq_mobile/features/photos/library/album_picker_page.dart';
 import 'package:pictoiq_mobile/features/photos/share/share_preview_page.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
-import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/features/splash/splash_page.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
 import 'package:pictoiq_mobile/features/settings/category_settings.dart';
@@ -468,15 +467,15 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   /// The heading of a result card, for example "Group 2 · 4 similar shots ·
-  /// 13:51" or "Moment 1 · Portrait · 13:51".
+  /// 13:51", "Photo 3 · Single shot · 13:51" (a photo with no look-alikes) or
+  /// "Moment 1 · Portrait · 13:51".
   String _groupName(FolderDuplicateGroup group, int number) {
     final clock = _groupClock(group);
     final parts = _moments
         ? ['Moment $number', _momentKind(group)]
-        : [
-            'Group $number',
-            '${group.photos.length} similar shot${group.photos.length == 1 ? '' : 's'}',
-          ];
+        : group.photos.length == 1
+        ? ['Photo $number', 'Single shot']
+        : ['Group $number', '${group.photos.length} similar shots'];
     return [...parts, ?clock].join(' · ');
   }
 
@@ -533,6 +532,13 @@ class _LibraryPageState extends State<LibraryPage> {
   void _goHome() {
     Navigator.of(context).popUntil((route) => route.isFirst);
     if (_showResultsPage) setState(() => _showResultsPage = false);
+  }
+
+  /// Back from the inline results: hides them and opens the tool's browse
+  /// screen again (Home is underneath it).
+  void _backToBrowse(ScanMode mode) {
+    if (_showResultsPage) setState(() => _showResultsPage = false);
+    unawaited(_openPhotoConfiguration(mode));
   }
 
   /// Photo, video and album totals for the home header; null until access to
@@ -1156,7 +1162,7 @@ class _LibraryPageState extends State<LibraryPage> {
     await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => ScanConfigurationPage(
-          title: _photoFeatureTitle(mode),
+          title: _photoBrowseTitle(mode),
           icon: switch (mode) {
             ScanMode.bestMoments => Icons.collections_outlined,
             ScanMode.duplicates => Icons.copy_all_outlined,
@@ -1279,11 +1285,12 @@ class _LibraryPageState extends State<LibraryPage> {
     _flushPopup();
   }
 
-  String _photoFeatureTitle(ScanMode mode) => switch (mode) {
-    ScanMode.bestMoments => 'Best moments',
-    ScanMode.duplicates => 'Exact photos',
-    ScanMode.bestShot => 'Best shots',
-    ScanMode.clutter => 'Gallery cleanup',
+  /// The title of a tool's browse screen.
+  String _photoBrowseTitle(ScanMode mode) => switch (mode) {
+    ScanMode.bestMoments => 'Find best moments',
+    ScanMode.duplicates => 'Find exact photos',
+    ScanMode.bestShot => 'Find best shots',
+    ScanMode.clutter => 'Start gallery cleanup',
   };
 
   /// The scan button's label, which reads better than "Find" plus the tool name.
@@ -2609,55 +2616,91 @@ class _LibraryPageState extends State<LibraryPage> {
     bottomNavigationBar: _bottomNavigationBar(),
   );
 
-  /// The footer depends on the screen. On the results screen: Photos (back
-  /// home), Share and Create reel. Everywhere else: Photos, [Videos], Settings
-  /// and Privacy.
-  Widget _bottomNavigationBar() {
+  /// The footer depends on the screen. On the results screen: Share and Create
+  /// reel. On Home: the Photos | Videos switch, or nothing when videos are off.
+  Widget? _bottomNavigationBar() {
     final onResults = _tab == 0 && !_scanActive && _showResultsPage && !_videoMode;
     if (onResults) return _resultsNavigationBar();
-    final settingsIndex = _videoEnabled ? 2 : 1;
-    return NavigationBar(
-      height: 68,
-      selectedIndex: _videoMode ? 1 : 0,
-      onDestinationSelected: (index) {
-        if (_scanActive || _importing) return;
-        if (index == 0 || (_videoEnabled && index == 1)) {
-          setState(() {
-            _videoMode = index == 1;
-            _showResultsPage = false;
-          });
-        } else if (index == settingsIndex) {
-          unawaited(_openSettings());
-        } else {
-          unawaited(_showPrivacy());
-        }
-      },
-      destinations: [
-        const NavigationDestination(
-          icon: Icon(Icons.photo_outlined),
-          selectedIcon: Icon(Icons.photo),
-          label: 'Photos',
-        ),
-        if (_videoEnabled)
-          const NavigationDestination(
-            icon: Icon(Icons.videocam_outlined),
-            selectedIcon: Icon(Icons.videocam),
-            label: 'Videos',
+    // With videos off there is only Photos, so there is nothing to switch
+    // and Home has no footer.
+    if (!_videoEnabled) return null;
+    return _modeSwitch();
+  }
+
+  /// The home footer: a light pill that switches between Photos and Videos.
+  /// Only used when videos are on.
+  Widget _modeSwitch() {
+    const dark = Color(0xFF1F5139);
+    Widget segment(IconData icon, String label, bool video) {
+      final selected = _videoMode == video;
+      return Expanded(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            if (_scanActive || _importing || selected) return;
+            setState(() {
+              _videoMode = video;
+              _showResultsPage = false;
+            });
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            height: 44,
+            decoration: BoxDecoration(
+              color: selected ? dark : Colors.transparent,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  icon,
+                  size: 20,
+                  color: selected ? Colors.white : const Color(0xFF3E4A43),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: selected ? Colors.white : const Color(0xFF3E4A43),
+                  ),
+                ),
+              ],
+            ),
           ),
-        const NavigationDestination(
-          icon: Icon(Icons.settings_outlined),
-          selectedIcon: Icon(Icons.settings),
-          label: 'Settings',
         ),
-        const NavigationDestination(
-          icon: Icon(Icons.shield_outlined),
-          label: 'Privacy',
+      );
+    }
+
+    return ColoredBox(
+      color: Colors.white,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+          child: Container(
+            height: 52,
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8EDE6),
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: Row(
+              children: [
+                segment(Icons.photo_library_outlined, 'Photos', false),
+                if (_videoEnabled)
+                  segment(Icons.videocam_outlined, 'Videos', true),
+              ],
+            ),
+          ),
         ),
-      ],
+      ),
     );
   }
 
-  /// Results footer: only Share and Create reel, in the theme's forest green.
+  /// Results footer: Share (light) and Create reel (filled) as two pill buttons.
   /// Going home is the home button in the top bar.
   Widget _resultsNavigationBar() {
     final scan = _bestShotsScan;
@@ -2668,32 +2711,52 @@ class _LibraryPageState extends State<LibraryPage> {
         !_importing &&
         !_creatingReel &&
         !_openingShare;
+    const dark = Color(0xFF1F5139);
     Widget action({
       required IconData icon,
       required String label,
-      required Color color,
+      required bool filled,
       required VoidCallback? onTap,
     }) {
-      final shown = onTap == null ? Colors.black26 : color;
+      final enabled = onTap != null;
+      final background = !enabled
+          ? const Color(0xFFEDEFEA)
+          : filled
+          ? dark
+          : AppColors.tint;
+      final foreground = !enabled
+          ? Colors.black38
+          : filled
+          ? Colors.white
+          : dark;
       return Expanded(
-        child: InkWell(
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, color: shown, size: 26),
-                const SizedBox(height: 4),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: shown,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
+        child: Material(
+          color: background,
+          borderRadius: BorderRadius.circular(24),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: onTap,
+            child: SizedBox(
+              height: 48,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, color: foreground, size: 22),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foreground,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -2705,18 +2768,21 @@ class _LibraryPageState extends State<LibraryPage> {
       color: Colors.white,
       child: SafeArea(
         top: false,
-        child: Row(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+          child: Row(
           children: [
             action(
               icon: Icons.ios_share_outlined,
               label: _openingShare && _openingFor == 'share' ? 'Checking…' : 'Share',
-              color: _green,
+              filled: false,
               onTap: canShare
                   ? () => unawaited(
                       _sharePhotos(_picksToShare(scan.duplicateGroups)),
                     )
                   : null,
             ),
+            const SizedBox(width: 10),
             action(
               icon: Icons.movie_creation_outlined,
               label: _creatingReel
@@ -2724,10 +2790,11 @@ class _LibraryPageState extends State<LibraryPage> {
                   : (_openingShare && _openingFor == 'reel'
                         ? 'Checking…'
                         : 'Create reel'),
-              color: _green,
+              filled: true,
               onTap: canShare ? () => unawaited(_createPhotoReel(scan)) : null,
             ),
           ],
+        ),
         ),
       ),
     );
@@ -2848,11 +2915,11 @@ class _LibraryPageState extends State<LibraryPage> {
   /// and its name. It also covers the status bar.
   Widget _resultsTopBar() {
     final bestShots = _resultsAreBestShots;
-    final (icon, title) = _moments && bestShots
-        ? (Icons.collections_outlined, 'Best moments')
+    final title = _moments && bestShots
+        ? 'Best moments'
         : bestShots
-        ? (Icons.photo_camera_outlined, 'Best shots')
-        : (Icons.copy_all_outlined, 'Exact photos');
+        ? 'Best shots'
+        : 'Exact photos';
     return ColoredBox(
       color: AppColors.pageTop,
       child: SafeArea(
@@ -2861,27 +2928,38 @@ class _LibraryPageState extends State<LibraryPage> {
           height: kToolbarHeight,
           child: Row(
             children: [
-              const SizedBox(width: 16),
-              Expanded(
-                child: DefaultTextStyle(
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: _ink,
-                  ),
-                  child: AppBarTitle(icon: icon, title: title),
+              // Back goes to the screen before the results (Home).
+              SizedBox(
+                width: appBackButtonWidth,
+                child: AppBackButton(
+                  enabled: !_scanningFolder,
+                  onPressed: () => _backToBrowse(_resultsMode),
                 ),
               ),
-              IconButton(
-                tooltip: 'Find in another folder or range',
-                onPressed: _scanningFolder
-                    ? null
-                    : () => _openPhotoConfiguration(_resultsMode),
-                icon: const Icon(Icons.manage_search),
+              Expanded(
+                child: Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -.2,
+                    color: _ink,
+                  ),
+                ),
               ),
-              AppHomeButton(enabled: !_scanningFolder),
-              const AppMenuButton(),
-              const SizedBox(width: 4),
+              // Same width as the back button, so the title stays centred.
+              SizedBox(
+                width: appBackButtonWidth,
+                child: IconButton(
+                  tooltip: 'Find in another folder or range',
+                  onPressed: _scanningFolder
+                      ? null
+                      : () => _backToBrowse(_resultsMode),
+                  icon: const Icon(Icons.manage_search, size: 26),
+                ),
+              ),
             ],
           ),
         ),
@@ -2998,33 +3076,21 @@ class _LibraryPageState extends State<LibraryPage> {
       ] else
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 2),
-          child: Text.rich(
-            TextSpan(
-              children: [
-                WidgetSpan(
-                  alignment: PlaceholderAlignment.middle,
-                  child: Padding(
-                    padding: EdgeInsets.only(right: 6),
-                    child: Icon(
-                      Icons.auto_awesome,
-                      size: 18,
-                      color: AppColors.accent,
-                    ),
-                  ),
+          child: Row(
+            children: [
+              Icon(Icons.auto_awesome, size: 22, color: AppColors.accent),
+              SizedBox(width: 8),
+              Text(
+                'Explore & Create',
+                style: TextStyle(
+                  fontSize: 22,
+                  height: 1.2,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -.4,
+                  color: AppColors.ink,
                 ),
-                TextSpan(
-                  text:
-                      'Choose a photo tool, and discover your photo library effortlessly.',
-                ),
-              ],
-            ),
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.4,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -.1,
-              color: AppColors.body,
-            ),
+              ),
+            ],
           ),
         ),
       const SizedBox(height: 14),
@@ -3208,10 +3274,72 @@ class _LibraryPageState extends State<LibraryPage> {
             ],
           ),
           const Spacer(),
+          _homeMenu(),
         ],
       ),
     ],
   );
+
+  /// The menu at the right of the home header: Settings and Privacy. Only the
+  /// home screen has it; every other screen is reached from here or from a
+  /// tool.
+  Widget _homeMenu() {
+    PopupMenuItem<String> item(String value, IconData icon, String label) =>
+        PopupMenuItem<String>(
+          value: value,
+          height: 52,
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  color: AppColors.tint,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 19, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: _ink,
+                ),
+              ),
+            ],
+          ),
+        );
+    return PopupMenuButton<String>(
+      tooltip: 'Menu',
+      enabled: !_scanActive && !_importing,
+      offset: const Offset(0, 48),
+      color: Colors.white,
+      elevation: 6,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      onSelected: (value) {
+        if (value == 'settings') {
+          unawaited(_openSettings());
+        } else {
+          unawaited(_showPrivacy());
+        }
+      },
+      itemBuilder: (_) => [
+        item('settings', Icons.settings_outlined, 'Settings'),
+        item('privacy', Icons.shield_outlined, 'Privacy'),
+      ],
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+        ),
+        child: const Icon(Icons.menu_rounded, size: 24, color: _ink),
+      ),
+    );
+  }
 
   /// The home header of the modern themes: logo, headline, and the library
   /// totals when access has been given.
@@ -3275,20 +3403,30 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
           ),
           ],
-          const SizedBox(height: 14),
           // Shown once PictoIQ can see the photos (access is asked at the first
           // scan, or earlier if it was already given).
           if (snapshot != null) ...[
+            const SizedBox(height: 16),
             const Padding(
               padding: EdgeInsets.only(left: 2, bottom: 8),
-              child: Text(
-                'Your photo library',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: .1,
-                  color: AppColors.heroTitle,
-                ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.bar_chart_rounded,
+                    size: 20,
+                    color: AppColors.heroTitle,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    'Your photo library',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: .1,
+                      color: AppColors.heroTitle,
+                    ),
+                  ),
+                ],
               ),
             ),
             IntrinsicHeight(
@@ -3329,28 +3467,159 @@ class _LibraryPageState extends State<LibraryPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-          ],
-          // Said once, below the totals, instead of taking a tile of its own.
+          ] else
+            _howItWorks(),
+          const SizedBox(height: 12),
+          // The privacy promise, in the same size as the tagline.
           const Row(
             children: [
               Icon(
                 Icons.verified_user_outlined,
-                size: 18,
-                color: AppColors.heroStatLabel,
+                size: 16,
+                color: AppColors.heroStatAccent,
               ),
-              SizedBox(width: 8),
+              SizedBox(width: 6),
               Expanded(
                 child: Text(
                   '100% - Your photos stay on your device',
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    height: 1.2,
+                    fontWeight: FontWeight.w700,
                     color: AppColors.heroStatLabel,
                   ),
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Shown in place of the library numbers until PictoIQ can see the photos
+  /// (the first time the app is opened): a welcome banner with a drawn stack
+  /// of photos and a play button.
+  Widget _howItWorks() {
+    const dark = Color(0xFF1B4D3A);
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x1A0F3D2B),
+              blurRadius: 12,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Always one line: it shrinks a little on narrow phones.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Your memories are waiting.',
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 21,
+                        height: 1.15,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -.3,
+                        color: dark,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Discover moments, create reels and share memories.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: AppColors.body,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            _memoriesIllustration(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A soft green tile with three tilted photos and a play button, drawn with
+  /// widgets so it needs no image file.
+  Widget _memoriesIllustration() {
+    Widget photo(double angle, Offset shift, List<Color> colors) =>
+        Transform.translate(
+          offset: shift,
+          child: Transform.rotate(
+            angle: angle,
+            child: Container(
+              width: 54,
+              height: 42,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: colors,
+                ),
+                border: Border.all(color: Colors.white, width: 3),
+                borderRadius: BorderRadius.circular(4),
+                boxShadow: const [
+                  BoxShadow(color: Color(0x33000000), blurRadius: 4),
+                ],
+              ),
+            ),
+          ),
+        );
+    return Container(
+      width: 84,
+      height: 84,
+      decoration: BoxDecoration(
+        color: AppColors.tint,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          photo(-.35, const Offset(-8, -12), const [
+            Color(0xFFF2A65A),
+            Color(0xFF8E5BA8),
+          ]),
+          photo(.3, const Offset(10, -6), const [
+            Color(0xFF2F6F5E),
+            Color(0xFF16352C),
+          ]),
+          photo(-.08, const Offset(0, 8), const [
+            Color(0xFF7CC8C0),
+            Color(0xFF3E8C94),
+          ]),
+          Container(
+            width: 30,
+            height: 30,
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.play_arrow_rounded,
+              size: 24,
+              color: Color(0xFF3E8C94),
+            ),
           ),
         ],
       ),
@@ -4106,28 +4375,11 @@ class _LibraryPageState extends State<LibraryPage> {
           ),
           const SizedBox(width: 6),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _moments
-                      ? 'Tap a photo to enlarge it. Tap the circle to pick a different one, or ⓘ to see why it was chosen.'
-                      : 'Tap a photo to enlarge it. Tap its circle to keep that one, or ⓘ to see why it was chosen.',
-                  style: const TextStyle(fontSize: 12, color: AppColors.hint),
-                ),
-                if (bestShots &&
-                    _picksToShare(groups).length > AppLimits.shareMaxPhotos)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Share and Create reel use up to ${AppLimits.shareMaxPhotos} photos at a time. You choose which ones on the next screen.',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.hint,
-                      ),
-                    ),
-                  ),
-              ],
+            child: Text(
+              _moments
+                  ? 'Tap a photo to enlarge it. Tap the circle to pick a different one, or ⓘ to see why it was chosen.'
+                  : 'Tap a photo to enlarge it. Tap its circle to keep that one, or ⓘ to see why it was chosen.',
+              style: const TextStyle(fontSize: 12, color: AppColors.hint),
             ),
           ),
         ],
@@ -4277,10 +4529,17 @@ class _LibraryPageState extends State<LibraryPage> {
     final headline = groups == 0
         ? (_freedBytes > 0 ? 'All done' : 'Nothing found')
         : _moments
-        ? '$groups ${groups == 1 ? 'moment' : 'moments'} found'
+        ? '$groups best ${groups == 1 ? 'moment' : 'moments'} found'
         : bestShots
-        ? '$groups similar ${groups == 1 ? 'group' : 'groups'} found'
-        : '$groups duplicate ${groups == 1 ? 'group' : 'groups'} found';
+        ? '$groups best ${groups == 1 ? 'shot' : 'shots'} found'
+        : '$groups exact photo ${groups == 1 ? 'group' : 'groups'} found';
+    final headlineIcon = groups == 0
+        ? Icons.check_circle_outline
+        : _moments
+        ? Icons.collections_outlined
+        : bestShots
+        ? Icons.photo_camera_outlined
+        : Icons.copy_all_outlined;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -4296,13 +4555,24 @@ class _LibraryPageState extends State<LibraryPage> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  color: AppColors.tint,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(headlineIcon, size: 19, color: _green),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.only(top: 2),
+                  padding: const EdgeInsets.only(top: 5),
                   child: Text(
                     headline,
                     style: const TextStyle(
                       fontSize: 18,
+                      height: 1.15,
                       fontWeight: FontWeight.w800,
                       color: _ink,
                     ),
@@ -4781,6 +5051,8 @@ class _LibraryPageState extends State<LibraryPage> {
                     Tooltip(
               message: _moments
                   ? 'Hide this moment from the results'
+                  : group.photos.length == 1
+                  ? 'Skip this photo: it stays and nothing is deleted'
                   : 'Skip this group: all its photos stay and nothing is deleted',
               child: TextButton.icon(
                 onPressed: _scanningFolder ? null : () => _skipGroup(group),
@@ -4788,7 +5060,13 @@ class _LibraryPageState extends State<LibraryPage> {
                   Icons.close_rounded,
                   size: 14,
                 ),
-                label: Text(_moments ? 'Skip moment' : 'Skip group'),
+                label: Text(
+                  _moments
+                      ? 'Skip moment'
+                      : group.photos.length == 1
+                      ? 'Skip photo'
+                      : 'Skip group',
+                ),
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.body,
                   backgroundColor: Colors.white.withValues(alpha: .94),
@@ -4898,6 +5176,12 @@ class _LibraryPageState extends State<LibraryPage> {
     if (_moments) {
       // Nothing is deleted from best moments, so there is no keep button.
       keep = const SizedBox.shrink();
+    } else if (group.photos.length == 1 ||
+        (decision.hasDecision &&
+            _groupRecoveryBytes(group, bestShots: true) <= 0)) {
+      // A single photo, or every photo kept: nothing would be deleted, so
+      // there is no "Save 0 B" button.
+      keep = const SizedBox.shrink();
     } else if (!decision.hasDecision) {
       keep = const Text(
         'Choose the photo to keep.',
@@ -4995,7 +5279,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   title: const Text('Review finished'),
                   leading: const AppBackButton(),
                   leadingWidth: appBackButtonWidth,
-                  actions: const [AppMenuButton()],
+                  actions: const [AppHomeButton()],
                 ),
                 body: Center(
                   child: Padding(
@@ -5060,7 +5344,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 title: Text('Review ${index + 1} of ${queue.length}'),
                 leading: const AppBackButton(),
                 leadingWidth: appBackButtonWidth,
-                actions: const [AppMenuButton()],
+                actions: const [AppHomeButton()],
                 bottom: PreferredSize(
                   preferredSize: const Size.fromHeight(3),
                   child: LinearProgressIndicator(value: index / queue.length),

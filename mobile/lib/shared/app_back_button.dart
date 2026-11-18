@@ -32,8 +32,8 @@ class AppBackButton extends StatelessWidget {
   );
 }
 
-/// The home icon shown on browse and results screens, just left of the ⋮
-/// menu. It returns to the home screen, or runs [onPressed] when the screen
+/// The home icon shown at the right of the Share, Create reel and review
+/// screens. It returns to the home screen, or runs [onPressed] when the screen
 /// is not its own route.
 class AppHomeButton extends StatelessWidget {
   const AppHomeButton({super.key, this.enabled = true, this.onPressed});

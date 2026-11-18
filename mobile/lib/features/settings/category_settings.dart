@@ -724,8 +724,12 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.tune, color: _green, size: 22),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 1),
+                    child: Icon(Icons.tune, color: _green, size: 21),
+                  ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
@@ -735,6 +739,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                           'Change filter',
                           style: TextStyle(
                             fontSize: 15,
+                            height: 1.3,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
@@ -748,10 +753,13 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                       ],
                     ),
                   ),
-                  AnimatedRotation(
-                    turns: _open ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: const Icon(Icons.expand_more, color: _green),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: AnimatedRotation(
+                      turns: _open ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 180),
+                      child: const Icon(Icons.expand_more, color: _green),
+                    ),
                   ),
                 ],
               ),

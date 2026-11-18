@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
-import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/clutter/clutter_classifier.dart';
@@ -219,20 +217,32 @@ class _ClutterPageState extends State<ClutterPage> {
     return AppScaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
+        // Back goes to the Find screen (onFind), not Home.
+        leading: AppBackButton(
+          enabled: !_deleting,
+          onPressed: widget.onFind,
+        ),
+        leadingWidth: appBackButtonWidth,
+        centerTitle: true,
+        title: const Text(
+          'Gallery cleanup',
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 21,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -.2,
+            color: AppColors.ink,
+          ),
+        ),
         actions: [
           if (widget.onFind != null)
             IconButton(
               tooltip: 'Find in another folder or range',
-              onPressed: widget.onFind,
-              icon: const Icon(Icons.manage_search),
+              onPressed: _deleting ? null : widget.onFind,
+              icon: const Icon(Icons.manage_search, size: 26),
             ),
-          AppHomeButton(enabled: !_deleting),
-          const AppMenuButton(),
+          if (widget.onFind == null) const SizedBox(width: 8),
         ],
-        title: const AppBarTitle(
-          icon: Icons.cleaning_services_outlined,
-          title: 'Gallery cleanup',
-        ),
       ),
       body: Column(
         children: [

@@ -2,7 +2,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
@@ -140,8 +139,9 @@ class _AlbumContentsPageState extends State<AlbumContentsPage> {
   @override
   Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
-      automaticallyImplyLeading: false,
-      actions: const [AppHomeButton(), AppMenuButton()],
+      leading: const AppBackButton(),
+      leadingWidth: appBackButtonWidth,
+      actions: const [AppHomeButton()],
       title: Text(widget.album.name),
       bottom: PreferredSize(
         preferredSize: const Size.fromHeight(22),

@@ -72,20 +72,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Camera'));
     await tester.pumpAndSettle();
-    // The Android back gesture (there is no back arrow on this screen).
+    // The Android back gesture.
     tester.state<NavigatorState>(find.byType(Navigator).first).pop();
     await tester.pumpAndSettle();
     expect(find.text('Choose an album'), findsOneWidget);
     expect(result, isNull);
   });
 
-  testWidgets('the home button leaves the album screens', (tester) async {
+  testWidgets('the back arrow leaves the album screen', (tester) async {
     Object? result;
     await tester.pumpWidget(_host(_page(), (value) => result = value));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('Choose an album'), findsOneWidget);
-    await tester.tap(find.byTooltip('Home'));
+    await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
     expect(find.text('Choose an album'), findsNothing);
     expect(find.text('open'), findsOneWidget);

@@ -3,10 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
-import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
+import 'package:pictoiq_mobile/shared/scroll_with_top_button.dart';
 import 'package:pictoiq_mobile/core/video/video_reel_service.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
@@ -260,17 +259,14 @@ class _ReelConfigurationPageState extends State<ReelConfigurationPage> {
         appBar: AppBar(
           leading: AppBackButton(enabled: !_creating),
           leadingWidth: appBackButtonWidth,
-          actions: const [AppMenuButton()],
-          title: const AppBarTitle(
-            icon: Icons.movie_creation_outlined,
-            title: 'Create your reel',
-          ),
+          actions: [AppHomeButton(enabled: !_creating)],
+          centerTitle: true,
+          title: const Text('Create your reel'),
         ),
         body: AbsorbPointer(
           absorbing: _creating,
-          child: Scrollbar(
+          child: ScrollWithTopButton(
             controller: _scrollController,
-            thumbVisibility: true,
             child: CustomScrollView(
               key: _scrollKey,
               controller: _scrollController,

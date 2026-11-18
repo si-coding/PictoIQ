@@ -1,8 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
-import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
@@ -171,15 +169,19 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
     child: AppScaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
-        actions: [
-          AppHomeButton(enabled: !_scanning),
-          AppMenuButton(
-            enabled: !_scanning,
-            onSettings: widget.onSettings,
-            onPrivacy: widget.onPrivacy,
+        leading: AppBackButton(enabled: !_scanning),
+        leadingWidth: appBackButtonWidth,
+        centerTitle: true,
+        title: Text(
+          widget.title,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 21,
+            fontWeight: FontWeight.w800,
+            letterSpacing: -.2,
+            color: _ink,
           ),
-        ],
-        title: AppBarTitle(icon: widget.icon, title: widget.title),
+        ),
       ),
       body: IgnorePointer(
         ignoring: _scanning,
