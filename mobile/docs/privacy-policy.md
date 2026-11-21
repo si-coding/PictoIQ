@@ -1,3 +1,8 @@
+---
+layout: default
+title: PictoIQ Privacy Policy
+---
+
 # PictoIQ Privacy Policy
 
 Last updated: 17 November 2026
@@ -26,7 +31,7 @@ PictoIQ ("the app") helps you find your best photos and moments, remove exact du
 - If you add music, you choose an audio file with Android's file picker. PictoIQ copies it to its private cache for the length of the job and removes it afterwards. PictoIQ does not use the microphone and does not ask for audio permissions.
 - The finished reel and the copies of the photos made for sharing are kept in the app's temporary cache and replaced the next time you make one. Clearing the app's storage in Android settings removes them.
 
-## Sharing
+## Sharing photos and reels
 
 PictoIQ does not share anything on its own. Before photos are shared or made into a reel, you see them on a preview screen where you can remove any photo. PictoIQ does not automatically check your photos for sensitive content, so please look at what you share.
 
@@ -42,7 +47,7 @@ The app saves your settings (for example the match level you picked, or whether 
 
 The face detection and image labelling components (Google ML Kit) send limited technical diagnostics to Google over an encrypted connection, as described in [Google's ML Kit data disclosure](https://developers.google.com/ml-kit/android-data-disclosure). This can include the app's package name and version, device model and Android version, performance measurements and a per-installation identifier that is not intended to identify you or your device. It does not include your photos or the faces in them. We do not receive this information.
 
-## Sharing
+## Data sharing
 
 We do not sell your information and do not share it with third parties. We do not collect it in the first place: the only data leaving your device is the ML Kit diagnostics above, which go to Google.
 
