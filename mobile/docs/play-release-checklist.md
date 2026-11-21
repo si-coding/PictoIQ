@@ -10,12 +10,12 @@ Last reviewed: 21 November 2026. Items marked (you) need your accounts or device
 - Tools: Best moments, Best shots, Exact photos, Gallery cleanup; share 9 / reel 9 / scan 500 (`lib/core/config/app_limits.dart`); no sensitive-photo detector and no private marks (the listing and policy say so).
 - Best shots defaults: keep several photos per group, Balanced matching, ignore time taken, People and scenery, documents left out, faces and eyes on, keep different people apart on, clothing Balanced. Single shots are not listed.
 - Screens: Selected filter / Change filter on every results screen, custom date range page (Apply with a tick at the left, close at the right), date chips Today / 7 days / 30 days / Custom dates (the All chip needs `--dart-define=PICTOIQ_ALL_DATES=true`), view scanned files with group numbers, skipped-photo reasons, new logo, icon and splash.
-- Docs drafted: privacy policy, store listing text, Data safety answers (checked against Google's ML Kit disclosure on 16 Nov), permission declaration wording, copyright notes, `docs/store/play-icon-512.png`.
+- Docs drafted and the privacy policy hosted: privacy policy, store listing text, Data safety answers (checked against Google's ML Kit disclosure on 16 Nov), permission declaration wording, copyright notes, `docs/store/play-icon-512.png`.
 
 **Still yours (nothing in the code can do these)**
 1. Create the upload keystore, back it up in two places (section 1).
 2. Build, then test the **signed release** build on a real phone (sections 2 and 4). Nothing in this project has been compiled or run by me; run `flutter analyze` and `flutter test` first.
-3. Host the privacy policy at a public URL (section 5).
+3. ~~Host the privacy policy~~ Done 22 Nov: live at https://si-coding.github.io/pictoiq-privacy/privacy-policy.html (a separate public repo, `pictoiq-privacy`, so the app repo can be private). Use this URL in Play Console.
 4. Play Console: developer account, app, Data safety, content rating, photo permission declaration, store listing (section 5).
 5. Store assets: 1024x500 feature graphic, 2 to 8 phone screenshots from the release build (the 512 px icon exists).
 6. Closed test: 12 testers for 14 continuous days if your personal account is newer than 13 Nov 2023, then apply for production (section 6).
@@ -89,7 +89,7 @@ Check the build is really signed with your key: the build must not warn about de
 
 1. Developer account ($25 once) and identity verification.
 2. Create the app: name, default language, free, app (not game).
-3. Privacy policy: host `docs/privacy-policy.md` as a public web page (GitHub Pages, a Google Site or any host), fill in the contact email, and paste the URL.
+3. Privacy policy: hosted (22 Nov) at https://si-coding.github.io/pictoiq-privacy/privacy-policy.html. Paste that URL. If you change `docs/privacy-policy.md`, copy the change to the `pictoiq-privacy` repo too and update the "Last updated" date.
 4. Data safety form: use `docs/play-store-listing.md`, section "Data safety". Double-check it against the current ML Kit disclosure; you are responsible for the answers.
 5. Content rating questionnaire, target audience (18+ or "not designed for children" is simplest), ads (none), app category (Photography or Tools).
 6. Store listing: copy from `docs/play-store-listing.md`, add the 512x512 icon, a 1024x500 feature graphic and at least 2 phone screenshots.
