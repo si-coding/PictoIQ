@@ -6,6 +6,7 @@ import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/photos/duplicates/folder_duplicate_scanner.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/core/config/app_colors.dart';
+import 'package:pictoiq_mobile/core/config/feature_flags.dart';
 
 const _ink = AppColors.ink;
 const _green = AppColors.primary;
@@ -282,8 +283,16 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
       FolderDateRange.week: '7 days',
       FolderDateRange.month: '30 days',
       FolderDateRange.currentFolder: 'All',
-      FolderDateRange.custom: 'Custom',
+      FolderDateRange.custom: 'Custom dates',
     };
+    // "All" (no date limit) is a developer option: PICTOIQ_ALL_DATES.
+    final ranges = [
+      FolderDateRange.today,
+      FolderDateRange.week,
+      FolderDateRange.month,
+      if (FeatureFlags.current.allDatesEnabled) FolderDateRange.currentFolder,
+      FolderDateRange.custom,
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -294,8 +303,11 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
         const SizedBox(height: 10),
         Row(
           children: [
-            for (final range in FolderDateRange.values)
+            for (final range in ranges)
               Expanded(
+                // Every choice stays on one row; the wider "Custom dates"
+                // gets more room.
+                flex: range == FolderDateRange.custom ? 3 : 2,
                 child: Padding(
                   padding: EdgeInsets.only(
                     right: range == FolderDateRange.custom ? 0 : 6,
@@ -355,6 +367,8 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
                         const SizedBox(width: 3),
                         Text(
                           label,
+                          maxLines: 1,
+                          softWrap: false,
                           style: TextStyle(
                             color: selected ? Colors.white : _ink,
                             fontSize: 12,
@@ -365,6 +379,8 @@ class _ScanConfigurationPageState extends State<ScanConfigurationPage> {
                     )
                   : Text(
                       label,
+                      maxLines: 1,
+                      softWrap: false,
                       style: TextStyle(
                         color: selected ? Colors.white : _ink,
                         fontSize: 12,

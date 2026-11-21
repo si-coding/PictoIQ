@@ -14,6 +14,7 @@ lib/
 │   ├── settings/             app_settings.dart, settings_page.dart
 │   ├── photos/share/         share_preview_page.dart (review photos before sharing)
 │   ├── splash/               splash_page.dart (animated PictoIQ wordmark after the native launch screen)
+│   shared/brand_wordmark.dart  Brand colours, tagline style (Poppins Medium Italic) and the tinted wordmark images
 │   └── videos/               Planned; interfaces and folders only
 │       ├── library/  duplicates/  similarity/  moments/
 │       ├── enhancement/  player/  export/
@@ -23,18 +24,16 @@ lib/
 ├── shared/                   Photo and video engines that know no screen
 │   ├── event_grouping.dart
 │   ├── similarity_grouping.dart
-│   ├── shot_ranking.dart
-│   └── media_quality_scoring.dart
+│   └── shot_ranking.dart
 └── core/                     Device services (depends on nothing above it)
-    ├── media/                media_asset, access, metadata, fingerprint, permissions, image_processing
-    ├── video/                player, frames, metadata, processing, export
-    ├── ml/                   model_manager, inference_service, model_registry
+    ├── media/                media_asset, image_processing
+    ├── video/                video_reel_service
     └── database/             database_service (was library_store), migrations/
 ```
 
 `shared/app_background.dart` (`AppBackground`, `AppScaffold`) gives every screen the same light page background (the fresh green is only the header/app bar), and the scan results screen uses `AppBackground` too; `shared/app_bar_title.dart` (`AppBarTitle`) puts each screen's own icon in the header (the logo only appears on the home screen); new screens should use `AppScaffold`, not `Scaffold`. `shared/app_back_button.dart` is the white round back button used by every app bar; app bar colours come from `AppBarTheme` in `main.dart` (set from `AppColors`).
 
-The scan-finished popup is queued by `_showResultPopup` and opened by `_flushPopup` once the scan configuration screen has closed itself (opening it earlier would be closed by that pop). Result cards are named "Group N · count · time" (best shot) or "Moment N · kind · time" (best moments) by `_groupName`.
+The scan-finished popup is queued by `_showResultPopup` and opened by `_flushPopup` once the scan configuration screen has closed itself (opening it earlier would be closed by that pop). Result cards are named "Group N · Pair/Trio/Solo/Family or group/Scene · N similar shots" (best shots, `_peopleKind`) or "Moment N · kind · time" (best moments) by `_groupName`; View scanned files uses the same numbers (`_shownGroupLabels`).
 
 The results screen is a stack of white cards: a summary card (headline, numbers, Clean up all / Review all), the share card, a scope strip (folder, date range, photos scanned, scan menu) right above the group cards. The documents setting leaves out pages of text and files named like screenshots (`looksLikeScreenshotFile`); photos of a screen or slide cannot be told from other photos without an object-recognition model.
 
@@ -60,7 +59,7 @@ File moves only: no class was renamed or changed. `features/photos/library/` and
 
 ## Video status
 
-The home screen has a Photos | Videos switch with four video tiles. **Exact videos is built** (`features/videos/duplicates/`); the other three are "Coming soon". Under `core/video/`, `core/media/` and `features/videos/domain/models` there are still only interfaces and one model. Build order:
+The home screen has a Photos | Videos switch with four video tiles. **Exact videos is built** (`features/videos/duplicates/`); the other three are "Coming soon". The other video tools have no code yet (the unused interface stubs under `core/video`, `core/media`, `core/ml` were deleted on 21 Nov; add them back when a tool needs them). Build order:
 
 1. Exact duplicate videos (file fingerprints only; no frames). **Done.** `video_duplicates.dart` lists video albums with `photo_manager`, narrows candidates to videos with the same length and picture size, then streams a SHA-256 of only those and groups identical size+hash. `video_duplicates_page.dart` is the review screen. Logic is tested in `test/video_duplicates_test.dart`. Reading a video through `photo_manager` can make a temporary copy on Android 10+, so the scan clears that cache afterwards. Videos in a folder picked with Android's folder picker (SAF) are supported too: they are matched by file size, hashed from the SAF stream, shown without thumbnails and deleted through SAF. `features/videos/library/video_album_picker_page.dart` is the album picker (tapping an album opens `video_album_contents_page.dart`, a scrollable grid with lengths, and `video_player_page.dart` plays a video) (cover and count per album, "Other folder…", and messages for denied, limited or empty access).
 2. Video list and player.
@@ -77,7 +76,7 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact vide
 
 Browse, Choose an album and results screens have a round back arrow at the top left (`AppBackButton`, shared/app_back_button.dart) and a centred title. On the results screens the back arrow opens the tool's Find screen again (`_backToBrowse`; Gallery cleanup uses `onFind`) and the search icon at the top right does the same; Share, Create reel and the review screens have a Home icon at the top right instead of a menu. Until PictoIQ can see the photos, Home shows a "Your memories are waiting." banner (`_howItWorks`) in place of the library numbers, and the privacy line sits below it (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
 
-After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard`: a two-line header (folder · short range, counts), the filters as chips, and a "Filters" control that opens the scan's facts and the editable filters; after a filter differs from the one used for the scan it offers "Find again with these filters" (opens the Find screen). The Find screens' filter panel is titled "Update … Filter" with its chevron at the right. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
+After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard` ("Selected filter"): a short header (folder · range, counts) that expands to the filters that were used, as chips only, and a "Change filter" button that returns to the Find screen with its Change filter panel open (`_backToBrowse(expandFilters: true)`). There are no "Find again" buttons. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
 
 ## Feature flags
 
@@ -136,8 +135,8 @@ is gone (the stored `momentShowScenes` value is still honoured).
 
 The "N best moments found" section holds a small ⋮ menu (view scanned files, about this
 scan) and the scan's facts as plain text (folder and dates, photos scanned, the
-settings used). Below it, "Change filter" is a single collapsible panel
-(`ScanScopeCard(showScanDetails: false)`). When new results appear, the page
+settings used). Below it, "Selected filter" is a single collapsible panel
+(`ScanScopeCard(showScanDetails: false)`) with a Change filter button. When new results appear, the page
 glides down to the first photos (`_scrollToResults`).
 
 ### Home storage figure
@@ -168,8 +167,8 @@ longer has a lock button, so nothing new is marked there) and photos a
 `SensitiveContentDetector` scores at or above `sensitiveThreshold`. The current
 detector is `NoSensitiveDetector`, so only stored private marks apply. The share
 and reel preview screens let the person remove any photo before it is sent. In
-scan results each thumbnail has an info button (top right) that opens the "Why
-is this here?" panel; the enlarged photo has none.
+scan results the info button is in the enlarged photo (top right) and opens the "Why
+is this here?" panel; thumbnails have none.
 
 ### Lone photos
 
@@ -214,11 +213,10 @@ above `sensitiveThreshold`, so a working detector that implements
 
 Tool names use sentence case: Best moments, Best shots, Exact photos, Clutter;
 videos: Exact videos, Similar videos, Video best moments, Video enhance. The
-settings panel above results is "Change filter". Counts are pluralised (1
+panel above results is "Selected filter" (button: Change filter); the Find screens have "Change filter". Counts are pluralised (1
 moment, 2 moments). Error text shown to people is plain; technical detail
 (`runtimeType`, stack) is only printed with `debugPrint`, or shown in the album
-picker in debug builds only. In scan results each thumbnail has an info button
-(top right, 44 dp tap area).
+picker in debug builds only. The info button is at the top right of the enlarged photo (not on thumbnails).
 
 Home screen (photos): header with the logo; "Your photo library" totals (shown
 once photo access is granted, so after the first scan or earlier if already

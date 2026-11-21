@@ -7,7 +7,7 @@ abstract final class AppInfo {
 
   /// Shown in the app's About box. Copyright exists the moment the work is
   /// made; this notice just states it.
-  static const copyright = '© 2026 PictoIQ All rights reserved.';
+  static const copyright = '© 2026 PictoIQ. All rights reserved.';
 
   /// Where people write about the app and its privacy policy.
   static const contactEmail = 'pictoiq@gmail.com';

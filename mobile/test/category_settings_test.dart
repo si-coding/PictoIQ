@@ -46,7 +46,7 @@ void main() {
   });
 
   group('scan scope card', () {
-    Widget host({required VoidCallback onFindAgain, ValueChanged<AppSettings>? onChanged}) =>
+    Widget host({VoidCallback? onChangeFilter}) =>
         MaterialApp(
           home: Scaffold(
             body: SingleChildScrollView(
@@ -57,9 +57,7 @@ void main() {
                 scannedLine: '143 of 150 photos',
                 category: SettingsCategory.bestShot,
                 settings: const AppSettings(),
-                scannedWith: const AppSettings(),
-                onChanged: onChanged ?? (_) {},
-                onFindAgain: onFindAgain,
+                onChangeFilter: onChangeFilter ?? () {},
               ),
             ),
           ),
@@ -68,40 +66,29 @@ void main() {
     testWidgets('shows a short header and the filters as chips', (
       tester,
     ) async {
-      await tester.pumpWidget(host(onFindAgain: () {}));
+      await tester.pumpWidget(host());
       expect(find.text('Scan details'), findsOneWidget);
       expect(find.text('Camera · Last 7 days'), findsOneWidget);
       expect(find.text('143 photos scanned · 3 groups'), findsOneWidget);
       expect(find.text('Balanced match'), findsOneWidget);
-      expect(find.text('Find again with these filters'), findsNothing);
     });
 
-    testWidgets('opens, and offers Find again only after a change', (
+    testWidgets('opens to just the chosen filters and a Change filter button', (
       tester,
     ) async {
-      var again = 0;
-      AppSettings? saved;
-      await tester.pumpWidget(
-        host(onFindAgain: () => again++, onChanged: (s) => saved = s),
-      );
-      await tester.tap(find.text('Filters'));
+      var changed = 0;
+      await tester.pumpWidget(host(onChangeFilter: () => changed++));
+      await tester.tap(find.text('Selected filter').first);
       await tester.pumpAndSettle();
       expect(find.text('This scan'), findsOneWidget);
       expect(find.text('143 of 150 photos'), findsOneWidget);
-      expect(find.text('Find again with these filters'), findsNothing);
+      // The chosen filters only: no options to pick from.
+      expect(find.text('Balanced match'), findsOneWidget);
+      expect(find.byType(ChoiceChip), findsNothing);
 
-      final strict = find.widgetWithText(ChoiceChip, 'Strict').first;
-      await tester.ensureVisible(strict);
-      await tester.pumpAndSettle();
-      await tester.tap(strict);
-      await tester.pumpAndSettle();
-      expect(saved?.matchLevel, MatchLevel.strict);
-
-      final again0 = find.text('Find again with these filters');
-      await tester.ensureVisible(again0);
-      await tester.pumpAndSettle();
-      await tester.tap(again0);
-      expect(again, 1);
+      await tester.ensureVisible(find.text('Change filter'));
+      await tester.tap(find.text('Change filter'));
+      expect(changed, 1);
     });
   });
 }

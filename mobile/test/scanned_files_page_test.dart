@@ -53,11 +53,50 @@ void main() {
     expect(find.text('Left out by the date range: 2'), findsOneWidget);
     expect(find.text('a.jpg'), findsOneWidget);
     expect(find.text('Group 1'), findsNWidgets(2));
+    // Skipped files sit behind a button instead of cluttering the screen.
+    expect(find.text('broken.heic'), findsNothing);
+    await tester.tap(find.text('1 skipped photos · View reason'));
+    await tester.pumpAndSettle();
     expect(find.text('broken.heic'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
 
     await tester.tap(find.text('Not grouped (1)'));
     await tester.pump();
     expect(find.text('c.jpg'), findsOneWidget);
     expect(find.text('a.jpg'), findsNothing);
+  });
+
+  testWidgets('uses the group numbers of the result screen when given', (
+    tester,
+  ) async {
+    final a = _photo('a.jpg');
+    final b = _photo('b.jpg');
+    final scan = FolderScanResult(
+      folderUri: 'content://test',
+      folderName: 'Camera',
+      imagesScanned: 2,
+      duplicateGroups: [
+        FolderDuplicateGroup(id: 'g', photos: [a, b]),
+      ],
+      bestShotsScan: true,
+      dateRange: FolderDateRange.currentFolder,
+      imagesSkipped: 0,
+      imageFilesFound: 2,
+      imagesOutsideDateRange: 0,
+      scannedPhotos: [a, b],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ScannedFilesPage(
+          scan: scan,
+          loadPreview: (_) async => null,
+          groupLabels: {a.uri: 'Group 7', b.uri: 'Group 7'},
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Group 7'), findsNWidgets(2));
+    expect(find.text('Group 1'), findsNothing);
   });
 }

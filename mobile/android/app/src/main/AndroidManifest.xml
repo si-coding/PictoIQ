@@ -2,7 +2,10 @@
     <!-- Lists the phone's photo albums and reads photos for analysis. Photos
          are processed on the device and never uploaded. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-    <!-- <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/> -->
+    <!-- Photo-only first release: video access is not requested. Restore this
+         line (and build with PICTOIQ_VIDEO=true) when videos ship.
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+    -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>

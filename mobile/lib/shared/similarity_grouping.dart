@@ -348,7 +348,7 @@ enum MatchLevel {
   ),
   balanced(
     'Balanced',
-    'Same background and framing, including small camera movement.',
+    'Similar background and framing, with checks for people and clothing.',
   ),
   loose(
     'Loose',
@@ -483,6 +483,8 @@ class SimilarityThresholds {
     this.maxLinkGapMs = 0,
     this.splitComposition = false,
     this.maxPlaceMeters = 0,
+    this.attachRelax = 1.0,
+    this.peopleHistDistance = 0,
   });
 
   /// Groups photos by what is in them, ignoring when they were taken or
@@ -547,8 +549,18 @@ class SimilarityThresholds {
     MatchLevel level, {
     bool splitByPeople = true,
     TimeMode timeMode = TimeMode.off,
+    MatchLevel? people,
   }) {
     final faces = splitByPeople ? 2 : 1000;
+    // How closely clothing must match is its own choice, so "loose" photo
+    // matching can still keep different people apart.
+    final subject = !splitByPeople
+        ? 1.0
+        : switch (people ?? level) {
+            MatchLevel.strict => 0.12,
+            MatchLevel.balanced => 0.18,
+            MatchLevel.loose => 0.32,
+          };
     if (timeMode == TimeMode.moment) {
       return switch (level) {
         MatchLevel.strict => SimilarityThresholds(
@@ -596,7 +608,9 @@ class SimilarityThresholds {
         mediumDistance: 14,
         mediumLayoutDistance: 0.09,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.12 : 1.0,
+        maxSubjectDistance: subject,
+        splitComposition: splitByPeople,
+        peopleHistDistance: 0.12,
         histLinkDistance: 0.03,
         histLayoutDistance: 0.07,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
@@ -605,16 +619,24 @@ class SimilarityThresholds {
       ),
       MatchLevel.balanced => SimilarityThresholds(
         useCaptureTime: false,
+        // Keep Balanced focused on visually similar frames. The broader
+        // scene matching in Loose is more likely to join different people
+        // photographed against the same background.
         maxLinkDistance: 10,
         highDistance: 4,
         mediumDistance: 20,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.18 : 1.0,
+        maxSubjectDistance: subject,
+        splitComposition: splitByPeople,
+        // Require stronger clothing and scene colour agreement before using
+        // the pose independent people matching path.
+        peopleHistDistance: 0.12,
         histLinkDistance: 0.05,
         histLayoutDistance: 0.10,
         trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
-        trustedColorDistance: 0.28,
-        trustedLayoutDistance: 0.20,
+        trustedColorDistance: 0.20,
+        trustedLayoutDistance: 0.14,
+        splitShare: timeMode == TimeMode.hint ? 0.3 : 0.5,
       ),
       MatchLevel.loose => SimilarityThresholds(
         useCaptureTime: false,
@@ -626,12 +648,16 @@ class SimilarityThresholds {
         mediumDistance: 26,
         mediumLayoutDistance: 0.16,
         maxFaceCountDifference: faces,
-        maxSubjectDistance: splitByPeople ? 0.32 : 1.0,
+        maxSubjectDistance: subject,
+        splitComposition: splitByPeople,
+        peopleHistDistance: 0.24,
         histLinkDistance: 0.08,
         histLayoutDistance: 0.13,
-        trustedGapMs: timeMode == TimeMode.hint ? 10 * 1000 : 0,
-        trustedColorDistance: 0.30,
+        trustedGapMs: timeMode == TimeMode.hint ? 15 * 1000 : 0,
+        trustedColorDistance: 0.3,
         trustedLayoutDistance: 0.22,
+        splitShare: timeMode == TimeMode.hint ? 0.3 : 0.35,
+        attachRelax: 1.3,
       ),
     };
   }
@@ -676,6 +702,20 @@ class SimilarityThresholds {
   /// one person, a couple, a group) never link, so a portrait and a family
   /// photo at the same place are different moments.
   final bool splitComposition;
+
+  /// Content mode, people first: two photos whose people match (same kind of
+  /// people count, everyone in the clothes of someone in the other photo) also
+  /// link when their overall colours differ by at most this much, whatever the
+  /// structure hash or layout (pose and framing change those, not the people
+  /// or the setting). Needs clothing colours for both photos. 0 turns it off.
+  final double peopleHistDistance;
+
+  /// Content mode: after grouping, leftover photos and neighbouring groups are
+  /// joined when enough of their photos match under limits this many times
+  /// wider (colours and layout; the people checks stay as strict). 1 turns
+  /// the second pass off. Catches the same people at the same place whose
+  /// pose or framing changed between shots.
+  final double attachRelax;
 
   /// Photos with a known location further apart than this (metres) never
   /// link. 0 turns the check off. Photos without a location are not limited.
@@ -1132,7 +1172,7 @@ List<SimilarityCluster> _clusterByContent(
   }
 
   // Whether two photos are directly alike (every guard and tier applies).
-  bool linkedPair(int i, int j) {
+  bool linkedPair(int i, int j, [double relax = 1.0]) {
     final current = candidates[order[i]];
       final earlier = candidates[order[j]];
       // Photos known to be taken far apart are different moments, however
@@ -1194,6 +1234,20 @@ List<SimilarityCluster> _clusterByContent(
         }
         return false;
       }
+      // One photo has a face but no clothing colours (blurred, or the clothes
+      // blend into the scene) while the other has them: with only the
+      // background to go on, a different person in the same room would match,
+      // so such a pair must be a near-identical shot.
+      if (thresholds.maxSubjectDistance < 1.0) {
+        bool noClothes(SimilarityCandidate c) =>
+            (c.faceCount ?? 0) > 0 && !(c.people?.isNotEmpty ?? false);
+        if (noClothes(earlier) != noClothes(current)) {
+          final la = earlier.colorLayout;
+          final lb = current.colorLayout;
+          return distance <= thresholds.noLayoutHashDistance &&
+              (la == null || lb == null || layoutDistance(la, lb) <= 0.05);
+        }
+      }
       // A trustworthy camera time (never a file date) can confirm a match
       // that the pictures alone only suggest, however the structure changed.
       final trusted =
@@ -1202,11 +1256,20 @@ List<SimilarityCluster> _clusterByContent(
           current.captureSource == CaptureSource.exif &&
           (current.capturedAt - earlier.capturedAt).abs() <=
               thresholds.trustedGapMs;
-      final hashGate = math.max(
-        thresholds.shiftHashDistance,
-        thresholds.histLinkDistance > 0 ? thresholds.histHashDistance : 0,
-      );
-      if (distance > hashGate && !trusted) return false;
+      final hashGate = (math.max(
+                thresholds.shiftHashDistance,
+                thresholds.histLinkDistance > 0
+                    ? thresholds.histHashDistance
+                    : 0,
+              ) *
+              (relax > 1 ? 1.25 : 1.0))
+          .round();
+      final peopleTier =
+          thresholds.peopleHistDistance > 0 &&
+          thresholds.maxSubjectDistance < 1.0 &&
+          (earlier.people?.isNotEmpty ?? false) &&
+          (current.people?.isNotEmpty ?? false);
+      if (distance > hashGate && !trusted && !peopleTier) return false;
       // Same people in the same clothes: everyone in the photo with fewer
       // people must have a match in the other one.
       // Photos taken minutes apart at the same place get more slack: people
@@ -1226,9 +1289,9 @@ List<SimilarityCluster> _clusterByContent(
         final layout = layoutDistance(a, b);
         linked =
             (distance <= thresholds.maxLinkDistance &&
-                layout <= thresholds.layoutLinkDistance) ||
+                layout <= thresholds.layoutLinkDistance * relax) ||
             (distance <= thresholds.shiftHashDistance &&
-                layout <= thresholds.shiftLayoutDistance);
+                layout <= thresholds.shiftLayoutDistance * relax);
         // People moved or the camera zoomed: structure changed, colours did
         // not.
         final histA = earlier.colorHistogram;
@@ -1237,10 +1300,11 @@ List<SimilarityCluster> _clusterByContent(
             thresholds.histLinkDistance > 0 &&
             histA != null &&
             histB != null &&
-            distance <= thresholds.histHashDistance &&
+            distance <= (thresholds.histHashDistance * (relax > 1 ? 1.25 : 1.0)) &&
             sameFaces &&
-            layout <= thresholds.histLayoutDistance &&
-            histogramDistance(histA, histB) <= thresholds.histLinkDistance) {
+            layout <= thresholds.histLayoutDistance * relax &&
+            histogramDistance(histA, histB) <=
+                thresholds.histLinkDistance * relax) {
           linked = true;
         }
       }
@@ -1255,6 +1319,18 @@ List<SimilarityCluster> _clusterByContent(
             histogramDistance(histA, histB) <=
                 thresholds.trustedColorDistance &&
             layoutDistance(a, b) <= thresholds.trustedLayoutDistance;
+      }
+      if (!linked && peopleTier) {
+        // The same people in the same clothes against a similar background:
+        // pose and framing do not matter.
+        final histA = earlier.colorHistogram;
+        final histB = current.colorHistogram;
+        linked =
+            histA != null &&
+            histB != null &&
+            histogramDistance(histA, histB) <=
+                thresholds.peopleHistDistance * relax &&
+            (a == null || b == null || layoutDistance(a, b) <= 0.30);
       }
       return linked;
   }
@@ -1275,22 +1351,102 @@ List<SimilarityCluster> _clusterByContent(
   for (var i = 0; i < order.length; i++) {
     positions.putIfAbsent(find(i), () => []).add(i);
   }
-  return [
+  var groups = <List<int>>[
     for (final component in positions.values)
-      for (final group in _splitLooseChain(
+      ..._splitLooseChain(
         component,
         links,
         thresholds.splitShare,
-        minLinks: thresholds.trustedGapMs > 0 ? 3 : 0,
-      ))
-        if (group.length > 1)
-          SimilarityCluster(
-            members: [for (final position in group) order[position]],
-            evidence: _contentEvidenceFor([
-              for (final position in group) candidates[order[position]],
-            ], thresholds),
-          ),
+        minLinks: thresholds.trustedGapMs > 0 || thresholds.splitShare < 0.5
+            ? 3
+            : 0,
+      ),
   ];
+  if (thresholds.attachRelax > 1) {
+    groups = _joinNeighbours(
+      groups,
+      (i, j) => linkedPair(i, j, thresholds.attachRelax),
+    );
+  }
+  return [
+    for (final group in groups)
+      if (group.length > 1)
+        SimilarityCluster(
+          members: [for (final position in group) order[position]],
+          evidence: _contentEvidenceFor([
+            for (final position in group) candidates[order[position]],
+          ], thresholds),
+        ),
+  ];
+}
+
+/// Joins leftover photos and neighbouring [groups] when at least two photos
+/// of one are alike (under the relaxed test [alike]) photos of the other, and
+/// at least 30 % of the smaller group's size (three photos minimum for a group
+/// of two or more). Two groups of six or more are never merged, and no merged
+/// group exceeds 30 photos.
+List<List<int>> _joinNeighbours(
+  List<List<int>> groups,
+  bool Function(int, int) alike,
+) {
+  final owner = <int, int>{};
+  for (var g = 0; g < groups.length; g++) {
+    for (final position in groups[g]) {
+      owner[position] = g;
+    }
+  }
+  final all = owner.keys.toList()..sort();
+  final counts = <int, int>{};
+  for (var a = 0; a < all.length; a++) {
+    for (var b = a + 1; b < all.length; b++) {
+      final ga = owner[all[a]]!;
+      final gb = owner[all[b]]!;
+      if (ga == gb) continue;
+      if (!alike(all[b], all[a])) continue;
+      final key = ga < gb ? ga * groups.length + gb : gb * groups.length + ga;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+  }
+  final parent = List<int>.generate(groups.length, (g) => g);
+  final size = [for (final group in groups) group.length];
+  int find(int g) {
+    while (parent[g] != g) {
+      parent[g] = parent[parent[g]];
+      g = parent[g];
+    }
+    return g;
+  }
+
+  final pairs = counts.entries.toList()
+    ..sort((x, y) {
+      final byCount = y.value.compareTo(x.value);
+      return byCount != 0 ? byCount : x.key.compareTo(y.key);
+    });
+  for (final entry in pairs) {
+    final ga = find(entry.key ~/ groups.length);
+    final gb = find(entry.key % groups.length);
+    if (ga == gb) continue;
+    final smaller = math.min(groups[entry.key ~/ groups.length].length,
+        groups[entry.key % groups.length].length);
+    final larger = math.max(groups[entry.key ~/ groups.length].length,
+        groups[entry.key % groups.length].length);
+    final needed = smaller <= 1
+        ? (larger <= 2 ? 1 : 2)
+        : smaller <= 3
+        ? 2
+        : math.max(3, (smaller * 0.3).ceil());
+    if (entry.value < needed) continue;
+    // Two established scenes are not merged; only small leftovers join.
+    if (size[ga] >= 6 && size[gb] >= 6) continue;
+    if (size[ga] + size[gb] > 30) continue;
+    parent[gb] = ga;
+    size[ga] += size[gb];
+  }
+  final merged = <int, List<int>>{};
+  for (var g = 0; g < groups.length; g++) {
+    merged.putIfAbsent(find(g), () => []).addAll(groups[g]);
+  }
+  return [for (final group in merged.values) group..sort()];
 }
 
 /// Single links can chain a whole beach day together: A looks like B, B like

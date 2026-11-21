@@ -434,6 +434,9 @@ void main() {
       final loose = SimilarityThresholds.forLevel(MatchLevel.loose);
       expect(strict.maxLinkDistance, lessThan(balanced.maxLinkDistance));
       expect(balanced.maxLinkDistance, lessThan(loose.maxLinkDistance));
+      expect(balanced.shiftLayoutDistance, lessThan(loose.shiftLayoutDistance));
+      expect(balanced.maxSubjectDistance, lessThan(loose.maxSubjectDistance));
+      expect(balanced.peopleHistDistance, lessThan(loose.peopleHistDistance));
       expect(strict.shiftLayoutDistance, lessThan(loose.shiftLayoutDistance));
       expect(strict.useCaptureTime, isFalse);
     });
@@ -967,6 +970,28 @@ void main() {
       colorHistogram: bin(histBin),
     );
 
+    test('loose joins a leftover photo to a group it nearly matches', () {
+      final shots = [
+        shot('a', 0, 0.5),
+        shot('b', _bits(2), 0.5),
+        shot('c', _bits(28), 0.66),
+      ];
+      final loose = SimilarityThresholds.forLevel(
+        MatchLevel.loose,
+        timeMode: TimeMode.off,
+      );
+      final balanced = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.off,
+      );
+      expect(_names(shots, clusterSimilar(shots, thresholds: loose)), [
+        ['a', 'b', 'c'],
+      ]);
+      expect(_names(shots, clusterSimilar(shots, thresholds: balanced)), [
+        ['a', 'b'],
+      ]);
+    });
+
     test('matching colours link photos whose structure moved a lot', () {
       final shots = [shot('a', 0, 0.5), shot('b', _bits(28), 0.593)];
       expect(
@@ -1043,7 +1068,7 @@ void main() {
         shot('b', _bits(33), 0.6, seconds: 5, source: CaptureSource.modified),
       ];
       expect(clusterSimilar(modified, thresholds: hint), isEmpty);
-      final slow = [shot('a', 0, 0.5), shot('b', _bits(33), 0.6, seconds: 20)];
+      final slow = [shot('a', 0, 0.5), shot('b', _bits(33), 0.6, seconds: 40)];
       expect(clusterSimilar(slow, thresholds: hint), isEmpty);
     });
 
@@ -1268,6 +1293,153 @@ void main() {
         shots,
         thresholds: SimilarityThresholds.moments(placeMeters: 150),
       );
+      expect(_names(shots, clusters), [
+        ['a', 'b'],
+      ]);
+    });
+  });
+
+  group('best shots keep one scene together', () {
+    List<double> flat(double v) => [for (var i = 0; i < 36 * 3; i++) v];
+    List<double> bin(int i) => [
+      for (var k = 0; k < colorHistogramBins; k++) k == i ? 1.0 : 0.0,
+    ];
+    SimilarityCandidate shot(String name, int hash, int seconds, double v) =>
+        SimilarityCandidate(
+          visualHash: hash,
+          capturedAt: _t0 + seconds * 1000,
+          captureSource: CaptureSource.exif,
+          tieBreaker: name,
+          colorLayout: flat(v),
+          colorHistogram: bin(10),
+          faceCount: 2,
+        );
+    final thresholds = SimilarityThresholds.forLevel(
+      MatchLevel.balanced,
+      timeMode: TimeMode.hint,
+    );
+
+    test('a wider shot 12 s later joins the earlier shots', () {
+      final shots = [
+        shot('a', 0, 0, 0.5),
+        shot('b', _bits(3), 4, 0.5),
+        shot('c', _bits(30), 12, 0.6),
+      ];
+      final clusters = clusterSimilar(shots, thresholds: thresholds);
+      expect(_names(shots, clusters), [
+        ['a', 'b', 'c'],
+      ]);
+    });
+
+    test('a solo shot and a couple are kept apart, unless people are off', () {
+      SimilarityCandidate faces(String name, int count) => SimilarityCandidate(
+        visualHash: 0,
+        capturedAt: 0,
+        captureSource: CaptureSource.unknown,
+        tieBreaker: name,
+        colorLayout: flat(0.5),
+        colorHistogram: bin(10),
+        faceCount: count,
+      );
+      final shots = [faces('solo', 1), faces('couple', 2)];
+      final apart = SimilarityThresholds.forLevel(
+        MatchLevel.loose,
+        timeMode: TimeMode.off,
+      );
+      final together = SimilarityThresholds.forLevel(
+        MatchLevel.loose,
+        timeMode: TimeMode.off,
+        splitByPeople: false,
+      );
+      expect(clusterSimilar(shots, thresholds: apart), isEmpty);
+      expect(clusterSimilar(shots, thresholds: together), hasLength(1));
+    });
+
+    test('clothing strictness is separate from how loose matching is', () {
+      final loose = SimilarityThresholds.forLevel(
+        MatchLevel.loose,
+        timeMode: TimeMode.off,
+        people: MatchLevel.balanced,
+      );
+      final strictClothes = SimilarityThresholds.forLevel(
+        MatchLevel.loose,
+        timeMode: TimeMode.off,
+        people: MatchLevel.strict,
+      );
+      expect(loose.maxSubjectDistance, 0.18);
+      expect(strictClothes.maxSubjectDistance, 0.12);
+      expect(strictClothes.maxLinkDistance, loose.maxLinkDistance);
+    });
+
+    test('the same person in the same clothes groups despite a new pose', () {
+      SimilarityCandidate person(
+        String name,
+        int hash,
+        double layout,
+        int clothes,
+      ) => SimilarityCandidate(
+        visualHash: hash,
+        capturedAt: 0,
+        captureSource: CaptureSource.unknown,
+        tieBreaker: name,
+        colorLayout: flat(layout),
+        colorHistogram: bin(10),
+        faceCount: 1,
+        personColors: [bin(clothes)],
+      );
+      final thresholds = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.off,
+      );
+      // Structure and layout moved a lot, but it is the same person.
+      final same = [person('a', 0, 0.5, 5), person('b', _bits(44), 0.7, 5)];
+      expect(clusterSimilar(same, thresholds: thresholds), hasLength(1));
+      // Different clothes: never the same person.
+      final other = [person('a', 0, 0.5, 5), person('b', _bits(44), 0.7, 40)];
+      expect(clusterSimilar(other, thresholds: thresholds), isEmpty);
+    });
+
+    test('a photo with no clothing colours only joins a near-identical shot', () {
+      SimilarityCandidate person(String name, int hash, List<List<double>>? c) =>
+          SimilarityCandidate(
+            visualHash: hash,
+            capturedAt: 0,
+            captureSource: CaptureSource.unknown,
+            tieBreaker: name,
+            colorLayout: flat(0.5),
+            colorHistogram: bin(10),
+            faceCount: 1,
+            personColors: c,
+          );
+      final thresholds = SimilarityThresholds.forLevel(
+        MatchLevel.balanced,
+        timeMode: TimeMode.off,
+      );
+      // Same room, someone else, unknown clothes: not the same group.
+      expect(
+        clusterSimilar([
+          person('girl', 0, [bin(5)]),
+          person('man', _bits(20), null),
+        ], thresholds: thresholds),
+        isEmpty,
+      );
+      // A near-identical frame still joins.
+      expect(
+        clusterSimilar([
+          person('girl', 0, [bin(5)]),
+          person('same', _bits(2), null),
+        ], thresholds: thresholds),
+        hasLength(1),
+      );
+    });
+
+    test('a shot minutes later stays out', () {
+      final shots = [
+        shot('a', 0, 0, 0.5),
+        shot('b', _bits(3), 4, 0.5),
+        shot('c', _bits(30), 300, 0.75),
+      ];
+      final clusters = clusterSimilar(shots, thresholds: thresholds);
       expect(_names(shots, clusters), [
         ['a', 'b'],
       ]);

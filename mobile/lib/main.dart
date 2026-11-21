@@ -18,6 +18,7 @@ import 'package:pictoiq_mobile/features/photos/clutter/clutter_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/album_picker_page.dart';
 import 'package:pictoiq_mobile/features/photos/share/share_preview_page.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
+import 'package:pictoiq_mobile/shared/brand_wordmark.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/features/splash/splash_page.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
@@ -34,6 +35,7 @@ import 'package:pictoiq_mobile/features/photos/share/share_guard.dart';
 import 'package:pictoiq_mobile/features/photos/share/sensitive_warning.dart';
 import 'package:pictoiq_mobile/shared/sensitive_content.dart';
 import 'package:pictoiq_mobile/features/photos/library/photo_explain.dart';
+import 'package:pictoiq_mobile/features/photos/library/date_range_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
 import 'package:pictoiq_mobile/features/scan/scan_configuration_page.dart';
@@ -192,7 +194,10 @@ class _FeatureArtworkPainter extends CustomPainter {
       oldDelegate.accent != accent;
 }
 
-void main() => runApp(const PictoIqApp());
+void main() {
+  registerBrandLicenses();
+  runApp(const PictoIqApp());
+}
 
 class PictoIqApp extends StatelessWidget {
   const PictoIqApp({super.key, this.showSplash = true});
@@ -439,6 +444,26 @@ class _LibraryPageState extends State<LibraryPage> {
     ];
   }
 
+  /// Group badges as shown on the result cards (photo uri to "Group 3"), so
+  /// the Scanned files screen can use the same numbers.
+  Map<String, String> _shownGroupLabels = const {};
+
+  /// What the people in a best-shots group look like, from the usual number of
+  /// faces: "Solo", "Pair", "Trio" or "Family or group". Null when unknown.
+  String? _peopleKind(FolderDuplicateGroup group) {
+    final counts = [
+      for (final photo in group.photos)
+        if (photo.features?.faces?.count != null) photo.features!.faces!.count,
+    ]..sort();
+    if (counts.isEmpty) return null;
+    final usual = counts[counts.length ~/ 2];
+    if (usual <= 0) return 'Scene';
+    if (usual == 1) return 'Solo';
+    if (usual == 2) return 'Pair';
+    if (usual == 3) return 'Trio';
+    return 'Family or group';
+  }
+
   /// What a moment shows: a portrait, a pair, a group of people or a scene.
   String _momentKind(FolderDuplicateGroup group) {
     final top = group.bestFirst.isEmpty ? null : group.bestFirst.first;
@@ -451,32 +476,20 @@ class _LibraryPageState extends State<LibraryPage> {
     };
   }
 
-  /// "13:51" when the group's photos carry a camera time, else null.
-  String? _groupClock(FolderDuplicateGroup group) {
-    var newest = 0;
-    for (final photo in group.photos) {
-      if (photo.captureSource == CaptureSource.exif &&
-          photo.capturedAt > newest) {
-        newest = photo.capturedAt;
-      }
-    }
-    if (newest == 0) return null;
-    final time = DateTime.fromMillisecondsSinceEpoch(newest);
-    String two(int v) => v.toString().padLeft(2, '0');
-    return '${two(time.hour)}:${two(time.minute)}';
-  }
-
-  /// The heading of a result card, for example "Group 2 · 4 similar shots ·
-  /// 13:51", "Photo 3 · Single shot · 13:51" (a photo with no look-alikes) or
-  /// "Moment 1 · Portrait · 13:51".
+  /// The heading of a result card, for example "Group 2 · Pair · 4 similar shots",
+  /// "Photo 3 · Single shot" (a photo with no look-alikes) or
+  /// "Moment 1 · Portrait".
   String _groupName(FolderDuplicateGroup group, int number) {
-    final clock = _groupClock(group);
     final parts = _moments
         ? ['Moment $number', _momentKind(group)]
         : group.photos.length == 1
         ? ['Photo $number', 'Single shot']
-        : ['Group $number', '${group.photos.length} similar shots'];
-    return [...parts, ?clock].join(' · ');
+        : [
+            'Group $number',
+            ?_peopleKind(group),
+            '${group.photos.length} similar shots',
+          ];
+    return parts.join(' · ');
   }
 
   /// Which of the pair is selected for sharing: the person's choice, or the
@@ -536,9 +549,9 @@ class _LibraryPageState extends State<LibraryPage> {
 
   /// Back from the inline results: hides them and opens the tool's browse
   /// screen again (Home is underneath it).
-  void _backToBrowse(ScanMode mode) {
+  void _backToBrowse(ScanMode mode, {bool expandFilters = false}) {
     if (_showResultsPage) setState(() => _showResultsPage = false);
-    unawaited(_openPhotoConfiguration(mode));
+    unawaited(_openPhotoConfiguration(mode, expandFilters: expandFilters));
   }
 
   /// Photo, video and album totals for the home header; null until access to
@@ -967,7 +980,7 @@ class _LibraryPageState extends State<LibraryPage> {
             scan.folderName,
             scan.rangeDescription,
             '${scan.imagesScanned} photos checked · ${items.length} look like clutter',
-            () => _findAgain(ScanMode.clutter),
+            () => _findAgain(ScanMode.clutter, expandFilters: true),
           ),
           onFind: () => _findAgain(ScanMode.clutter),
         ),
@@ -975,15 +988,20 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  void _findVideosAgain() {
+  void _findVideosAgain({bool expandFilters = false}) {
     Navigator.of(context).pop();
-    unawaited(_openVideoConfiguration(VideoTool.exactDuplicates));
+    unawaited(
+      _openVideoConfiguration(
+        VideoTool.exactDuplicates,
+        expandFilters: expandFilters,
+      ),
+    );
   }
 
   /// Closes the results on top and opens the tool's Find screen.
-  void _findAgain(ScanMode mode) {
+  void _findAgain(ScanMode mode, {bool expandFilters = false}) {
     Navigator.of(context).pop();
-    unawaited(_openPhotoConfiguration(mode));
+    unawaited(_openPhotoConfiguration(mode, expandFilters: expandFilters));
   }
 
   /// The scope card for results pages that are their own screen (clutter,
@@ -993,16 +1011,14 @@ class _LibraryPageState extends State<LibraryPage> {
     String folder,
     String range,
     String counts,
-    VoidCallback onFindAgain,
+    VoidCallback onChangeFilter,
   ) => ScanScopeCard(
     folder: folder,
     range: range,
     counts: counts,
     category: category,
     settings: _settings,
-    scannedWith: _settings,
-    onChanged: _updateSettings,
-    onFindAgain: onFindAgain,
+    onChangeFilter: onChangeFilter,
   );
 
   /// Opens the video album picker (covers and counts, like the photo albums)
@@ -1146,7 +1162,7 @@ class _LibraryPageState extends State<LibraryPage> {
             scan.albumName,
             range,
             '${scan.videosFound} videos checked · ${scan.groups.length} sets',
-            _findVideosAgain,
+            () => _findVideosAgain(expandFilters: true),
           ),
           onFind: _findVideosAgain,
         ),
@@ -1154,7 +1170,10 @@ class _LibraryPageState extends State<LibraryPage> {
     );
   }
 
-  Future<void> _openPhotoConfiguration(ScanMode mode) async {
+  Future<void> _openPhotoConfiguration(
+    ScanMode mode, {
+    bool expandFilters = false,
+  }) async {
     setState(() {
       _videoMode = false;
       _scanMode = mode;
@@ -1187,7 +1206,10 @@ class _LibraryPageState extends State<LibraryPage> {
           loadVideoGallery: (_) async => const [],
           scanEnabled: Platform.isAndroid && !_scanningFolder && !_importing,
           scanLabel: _photoScanLabel(mode),
-          settingsPanel: _settingsPanel(_categoryFor(mode)),
+          settingsPanel: _settingsPanel(
+            _categoryFor(mode),
+            expanded: expandFilters,
+          ),
           onSettings: _openSettings,
           onPrivacy: _showPrivacy,
           onScan: () => switch (mode) {
@@ -1214,7 +1236,9 @@ class _LibraryPageState extends State<LibraryPage> {
   };
 
   /// Collapsible, editable settings for one tool.
-  Widget _settingsPanel(SettingsCategory category) => CategorySettingsPanel(
+  Widget _settingsPanel(SettingsCategory category, {bool expanded = false}) =>
+      CategorySettingsPanel(
+    initiallyExpanded: expanded,
     category: category,
     settings: _settings,
     onChanged: _updateSettings,
@@ -1227,7 +1251,10 @@ class _LibraryPageState extends State<LibraryPage> {
       ? ScanMode.bestShot
       : ScanMode.duplicates;
 
-  Future<void> _openVideoConfiguration(VideoTool tool) async {
+  Future<void> _openVideoConfiguration(
+    VideoTool tool, {
+    bool expandFilters = false,
+  }) async {
     setState(() {
       _videoMode = true;
       _videoTool = tool;
@@ -1276,7 +1303,7 @@ class _LibraryPageState extends State<LibraryPage> {
           scanProgressRevision: _scanProgressRevision,
           scanProgressBuilder: () => _scanProgressButton(inConfiguration: true),
           settingsPanel: isAvailable
-              ? _settingsPanel(SettingsCategory.video)
+              ? _settingsPanel(SettingsCategory.video, expanded: expandFilters)
               : null,
         ),
       ),
@@ -1424,6 +1451,9 @@ class _LibraryPageState extends State<LibraryPage> {
         folderName: selectedFolder.name,
         bestShotsScan: bestShots,
         groupShots: !clutter,
+        // Best shots compares similar photos, so a photo with nothing like it
+        // is not listed; Best moments may still show a lone good photo.
+        includeLoneShots: moments,
         useFaceSignals: _settings.useFaceSignals,
         thresholds: moments
             ? SimilarityThresholds.moments(
@@ -1437,6 +1467,7 @@ class _LibraryPageState extends State<LibraryPage> {
             : SimilarityThresholds.forLevel(
                 _settings.matchLevel,
                 splitByPeople: _settings.splitByPeople,
+                people: _settings.shotPeople,
                 timeMode: _settings.timeMode,
               ),
         documentMode: _settings.documentMode,
@@ -2291,34 +2322,14 @@ class _LibraryPageState extends State<LibraryPage> {
     var customRange = _customRange;
     if (range == FolderDateRange.custom) {
       final now = DateTime.now();
-      final picked = await showDateRangePicker(
-        context: context,
-        firstDate: DateTime(2000),
-        lastDate: now,
-        initialDateRange: customRange,
-        helpText: 'Scan photos from … to …',
-        saveText: 'Apply range',
-        builder: (context, child) => Theme(
-          data: Theme.of(context).copyWith(
-            textButtonTheme: TextButtonThemeData(
-              style: TextButton.styleFrom(
-                foregroundColor: _green,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-                textStyle: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
-                  side: const BorderSide(color: AppColors.tintBorder),
-                ),
-              ),
-            ),
+      final picked = await Navigator.of(context).push<DateTimeRange>(
+        MaterialPageRoute(
+          fullscreenDialog: true,
+          builder: (_) => DateRangePage(
+            firstDate: DateTime(2000),
+            lastDate: now,
+            initialRange: customRange,
           ),
-          child: child!,
         ),
       );
       if (picked == null || !mounted) return null;
@@ -3225,51 +3236,24 @@ class _LibraryPageState extends State<LibraryPage> {
       Row(
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(13),
             child: Image.asset(
               'assets/brand/pictoiq-icon.png',
-              width: 38,
-              height: 38,
+              width: 46,
+              height: 46,
               fit: BoxFit.cover,
             ),
           ),
-          const SizedBox(width: 10),
-          const Column(
+          const SizedBox(width: 12),
+          Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'picto',
-                    style: TextStyle(
-                      color: AppColors.modern ? AppColors.heroTitle : _ink,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -.7,
-                    ),
-                  ),
-                  Text(
-                    'iq',
-                    style: TextStyle(
-                      color: AppColors.accent,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -.7,
-                    ),
-                  ),
-                ],
-              ),
+              const PictoIqWordmark(height: 26),
+              const SizedBox(height: 2),
               Text(
                 'Your memories, made smarter',
-                style: TextStyle(
-                  fontSize: 11,
-                  height: 1.05,
-                  fontStyle: FontStyle.italic,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.accent,
-                ),
+                style: Brand.taglineStyle.copyWith(fontSize: 12, height: 1.1),
               ),
             ],
           ),
@@ -3688,7 +3672,7 @@ class _LibraryPageState extends State<LibraryPage> {
             Expanded(
               child: _toolTile(
                 title: 'Exact photos',
-                text: 'Find identical photos and free space.',
+                text: 'Review identical photos and free space.',
                 chip: 'Smart scan',
                 icon: Icons.copy_all_outlined,
                 colors: AppToolColors.duplicates,
@@ -3717,7 +3701,7 @@ class _LibraryPageState extends State<LibraryPage> {
             Expanded(
               child: _toolTile(
                 title: 'Gallery cleanup',
-                text: 'Find unwanted photos.',
+                text: 'Review unwanted photos and free space.',
                 chip: 'Smart scan',
                 icon: Icons.cleaning_services_outlined,
                 colors: AppToolColors.clutter,
@@ -4377,8 +4361,8 @@ class _LibraryPageState extends State<LibraryPage> {
           Expanded(
             child: Text(
               _moments
-                  ? 'Tap a photo to enlarge it. Tap the circle to pick a different one, or ⓘ to see why it was chosen.'
-                  : 'Tap a photo to enlarge it. Tap its circle to keep that one, or ⓘ to see why it was chosen.',
+                  ? 'Tap a photo to enlarge it, then ⓘ at the top right to see why it was chosen. Tap the circle to pick a different one.'
+                  : 'Tap a photo to enlarge it, then ⓘ at the top right to see why it was chosen. Tap its circle to keep that one.',
               style: const TextStyle(fontSize: 12, color: AppColors.hint),
             ),
           ),
@@ -4394,11 +4378,23 @@ class _LibraryPageState extends State<LibraryPage> {
     }
     // Name the groups in the order they are shown.
     final names = <String, String>{};
+    final labels = <String, String>{};
     for (final key in order) {
       for (final group in byEvent[key]!) {
-        names[group.id] = _groupName(group, names.length + 1);
+        final number = names.length + 1;
+        names[group.id] = _groupName(group, number);
+        final word = _moments
+            ? 'Moment'
+            : group.photos.length == 1
+            ? 'Photo'
+            : 'Group';
+        for (final photo in group.photos) {
+          labels[photo.uri] = '$word $number';
+        }
       }
     }
+    // The Scanned files screen shows the same numbers as these cards.
+    _shownGroupLabels = labels;
     return [
       if (order.isNotEmpty) hint,
       for (final key in order) ...[
@@ -4523,6 +4519,15 @@ class _LibraryPageState extends State<LibraryPage> {
         builder: (_) => ScannedFilesPage(
           scan: scan,
           loadPreview: _folderScanner.loadPreview,
+          groupLabels:
+              scan.duplicateGroups.isNotEmpty &&
+                  scan.duplicateGroups.every(
+                    (group) => group.photos.every(
+                      (photo) => _shownGroupLabels.containsKey(photo.uri),
+                    ),
+                  )
+              ? _shownGroupLabels
+              : null,
         ),
       ),
     );
@@ -4774,10 +4779,8 @@ class _LibraryPageState extends State<LibraryPage> {
     counts:
         '${scan.imagesScanned} photos scanned · ${scan.duplicateGroups.length} $groupLabel',
     category: _categoryForResults(bestShots),
-    settings: _settings,
-    scannedWith: _resultsScanSettings ?? _settings,
-    onChanged: _updateSettings,
-    onFindAgain: () => _openPhotoConfiguration(_resultsMode),
+    settings: _resultsScanSettings ?? _settings,
+    onChangeFilter: () => _backToBrowse(_resultsMode, expandFilters: true),
   );
 
   Future<void> _showScanDetails(
@@ -4947,6 +4950,7 @@ class _LibraryPageState extends State<LibraryPage> {
   Future<void> _showExactPhotoPreview(
     FolderScanPhoto photo, {
     List<FolderScanPhoto>? among,
+    bool withDetails = false,
   }) {
     var list = among ?? [photo];
     var index = list.indexWhere((p) => p.uri == photo.uri);
@@ -4965,6 +4969,8 @@ class _LibraryPageState extends State<LibraryPage> {
                 title: item.relativePath,
                 preview: item.previewBytes,
                 loadLarge: () => _folderScanner.loadLargePreview(item.uri),
+                // The ⓘ in the viewer's top right corner explains the photo.
+                details: withDetails ? explainPhoto(item) : const [],
               ),
           ],
         ),
@@ -5039,7 +5045,7 @@ class _LibraryPageState extends State<LibraryPage> {
                     Expanded(
                       child: Text(
                         name,
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 14,
@@ -5595,6 +5601,7 @@ class _LibraryPageState extends State<LibraryPage> {
               onTap: () => _showExactPhotoPreview(
                 photo,
                 among: _moments ? _momentPair(group) : group.bestFirst,
+                withDetails: true,
               ),
               child: Container(
                 decoration: BoxDecoration(
@@ -5688,45 +5695,12 @@ class _LibraryPageState extends State<LibraryPage> {
                   ),
                 ),
               ),
-            Positioned(
-              right: 0,
-              top: 0,
-              child: InkResponse(
-                onTap: () => showPhotoDetails(
-                  context,
-                  photo.relativePath,
-                  explainPhoto(photo),
-                ),
-                radius: 22,
-                child: Tooltip(
-                  message: 'Why is this here?',
-                  child: SizedBox(
-                    width: small ? 36 : 44,
-                    height: small ? 36 : 44,
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(5),
-                        decoration: const BoxDecoration(
-                          color: Color(0xE6FFFFFF),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.info_outline,
-                          size: 18,
-                          color: AppColors.body,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
             if (badge != null)
               Positioned(
                 left: 4,
                 top: 4,
                 child: Container(
-                  constraints: BoxConstraints(maxWidth: width - 8),
+                  constraints: BoxConstraints(maxWidth: width - 34),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
                     vertical: 2,

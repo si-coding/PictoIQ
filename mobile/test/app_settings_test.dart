@@ -25,14 +25,16 @@ void main() {
   test('defaults let PictoIQ suggest photos and use faces', () {
     const settings = AppSettings();
     expect(settings.manualSelectionOnly, isFalse);
-    expect(settings.bestShotSelection, BestShotSelection.single);
+    expect(settings.bestShotSelection, BestShotSelection.multiple);
     expect(settings.useFaceSignals, isTrue);
     expect(settings.groupSessions, isFalse);
     expect(settings.matchLevel, MatchLevel.balanced);
     expect(settings.splitByPeople, isTrue);
     expect(settings.showEvents, isTrue);
     expect(settings.documentMode, DocumentMode.leaveOut);
-    expect(settings.timeMode, TimeMode.hint);
+    expect(settings.timeMode, TimeMode.off);
+    expect(settings.contentFilter, ContentFilter.peopleAndScenery);
+    expect(settings.shotPeople, MatchLevel.balanced);
   });
 
   test('reel settings default and survive a save', () async {
@@ -64,6 +66,13 @@ void main() {
     expect(await store.load(), saved);
   });
 
+  test('best shots clothing strictness survives a save', () async {
+    const saved = AppSettings(shotPeople: MatchLevel.strict);
+    await store.save(saved);
+    expect((await store.load()).shotPeople, MatchLevel.strict);
+    expect(const AppSettings().shotPeople, MatchLevel.balanced);
+  });
+
   test('matching options survive a save, and bad values fall back', () async {
     const saved = AppSettings(
       matchLevel: MatchLevel.loose,
@@ -80,7 +89,7 @@ void main() {
     });
     expect(bad.matchLevel, MatchLevel.balanced);
     expect(bad.splitByPeople, isTrue);
-    expect(bad.timeMode, TimeMode.hint);
+    expect(bad.timeMode, TimeMode.off);
     expect(bad.documentMode, DocumentMode.leaveOut);
   });
 
@@ -114,15 +123,15 @@ void main() {
   });
 
   test('best shot selection mode survives a save and ignores bad values', () async {
-    const saved = AppSettings(bestShotSelection: BestShotSelection.multiple);
+    const saved = AppSettings(bestShotSelection: BestShotSelection.single);
     await store.save(saved);
-    expect((await store.load()).bestShotSelection, BestShotSelection.multiple);
+    expect((await store.load()).bestShotSelection, BestShotSelection.single);
     expect(
       AppSettings.fromJson({'bestShotSelection': 'many'}).bestShotSelection,
-      BestShotSelection.single,
+      BestShotSelection.multiple,
     );
     expect(
-      const AppSettings(bestShotSelection: BestShotSelection.multiple) ==
+      const AppSettings(bestShotSelection: BestShotSelection.single) ==
           const AppSettings(),
       isFalse,
     );

@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
+import 'package:pictoiq_mobile/shared/brand_wordmark.dart';
 
 /// The opening screen: the logo with "picto" sliding in from the left and
 /// "iq" from the right until they meet just below it, then the app appears.
@@ -13,7 +16,7 @@ class SplashPage extends StatefulWidget {
   final WidgetBuilder next;
 
   /// Same value as `pictoiq_launcher_background` in the Android resources.
-  static const background = Color(0xFF153A36);
+  static const background = Brand.iconBackground;
   static const lime = Color(0xFFB7F36B);
 
   @override
@@ -61,14 +64,9 @@ class _SplashPageState extends State<SplashPage>
 
   @override
   Widget build(BuildContext context) {
-    // The native splash draws the logo 250 physical pixels wide.
-    final logo = 250 / MediaQuery.devicePixelRatioOf(context);
-    const style = TextStyle(
-      fontSize: 40,
-      fontWeight: FontWeight.w800,
-      letterSpacing: -1,
-      height: 1,
-    );
+    // The logo leads; the wordmark sits under it, clearly smaller.
+    final logo = math.max(250 / MediaQuery.devicePixelRatioOf(context), 132.0);
+    const wordmarkHeight = 34.0;
     return Scaffold(
       backgroundColor: SplashPage.background,
       body: Center(
@@ -84,8 +82,10 @@ class _SplashPageState extends State<SplashPage>
                 fit: BoxFit.cover,
               ),
             ),
-            const SizedBox(height: 18),
-            AnimatedBuilder(
+            // The icon art has margin of its own, so pull the wordmark up.
+            Transform.translate(
+              offset: Offset(0, -logo * .1),
+              child: AnimatedBuilder(
               animation: _slide,
               builder: (context, _) {
                 final t = _slide.value;
@@ -97,22 +97,25 @@ class _SplashPageState extends State<SplashPage>
                     children: [
                       Transform.translate(
                         offset: Offset(-offset, 0),
-                        child: Text(
-                          'picto',
-                          style: style.copyWith(color: Colors.white),
+                        child: const WordmarkPart.picto(
+                          key: ValueKey('wordmark-picto'),
+                          height: wordmarkHeight,
+                          color: Colors.white,
                         ),
                       ),
                       Transform.translate(
                         offset: Offset(offset, 0),
-                        child: Text(
-                          'iq',
-                          style: style.copyWith(color: SplashPage.lime),
+                        child: const WordmarkPart.iq(
+                          key: ValueKey('wordmark-iq'),
+                          height: wordmarkHeight,
+                          color: SplashPage.lime,
                         ),
                       ),
                     ],
                   ),
                 );
               },
+            ),
             ),
           ],
         ),

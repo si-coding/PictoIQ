@@ -28,19 +28,20 @@ enum BestShotSelection {
 class AppSettings {
   const AppSettings({
     this.manualSelectionOnly = false,
-    this.bestShotSelection = BestShotSelection.single,
+    this.bestShotSelection = BestShotSelection.multiple,
     this.useFaceSignals = true,
     this.groupSessions = false,
     this.matchLevel = MatchLevel.balanced,
     this.splitByPeople = true,
     this.showEvents = true,
-    this.timeMode = TimeMode.hint,
+    this.timeMode = TimeMode.off,
     this.documentMode = DocumentMode.leaveOut,
     this.contentFilter = ContentFilter.peopleAndScenery,
     this.momentWindow = MomentWindow.activity,
     this.momentCount = 2,
     this.momentVariety = MomentVariety.balanced,
     this.momentPeople = MatchLevel.balanced,
+    this.shotPeople = MatchLevel.balanced,
     this.momentExpression = MomentExpression.balanced,
     this.momentSeparateTypes = true,
     this.momentShowScenes = false,
@@ -57,7 +58,7 @@ class AppSettings {
   /// the ones to keep, and nothing is selected for deletion until they do.
   final bool manualSelectionOnly;
 
-  /// Best shot: keep a single photo per group (the default) or let the user
+  /// Best shot: keep a single photo per group or (the default) several, or let the user
   /// keep several.
   final BestShotSelection bestShotSelection;
 
@@ -101,6 +102,9 @@ class AppSettings {
 
   /// Best moments: how closely the people (by clothing colour) must match.
   final MatchLevel momentPeople;
+
+  /// Best shots: how closely clothing must match to count as the same person.
+  final MatchLevel shotPeople;
 
   /// Best moments: whether smiles count more or less.
   final MomentExpression momentExpression;
@@ -148,6 +152,7 @@ class AppSettings {
     int? momentCount,
     MomentVariety? momentVariety,
     MatchLevel? momentPeople,
+    MatchLevel? shotPeople,
     MomentExpression? momentExpression,
     bool? momentSeparateTypes,
     bool? momentShowScenes,
@@ -173,6 +178,7 @@ class AppSettings {
     momentCount: momentCount ?? this.momentCount,
     momentVariety: momentVariety ?? this.momentVariety,
     momentPeople: momentPeople ?? this.momentPeople,
+    shotPeople: shotPeople ?? this.shotPeople,
     momentExpression: momentExpression ?? this.momentExpression,
     momentSeparateTypes: momentSeparateTypes ?? this.momentSeparateTypes,
     momentShowScenes: momentShowScenes ?? this.momentShowScenes,
@@ -201,6 +207,7 @@ class AppSettings {
     'momentCount': momentCount,
     'momentVariety': momentVariety.name,
     'momentPeople': momentPeople.name,
+    'shotPeople': shotPeople.name,
     'momentExpression': momentExpression.name,
     'momentSeparateTypes': momentSeparateTypes,
     'momentShowScenes': momentShowScenes,
@@ -231,6 +238,7 @@ class AppSettings {
     final count = json['momentCount'];
     final variety = json['momentVariety'];
     final momentPeople = json['momentPeople'];
+    final shotPeople = json['shotPeople'];
     final expression = json['momentExpression'];
     final separateTypes = json['momentSeparateTypes'];
     final showScenes = json['momentShowScenes'];
@@ -289,6 +297,10 @@ class AppSettings {
       momentPeople: MatchLevel.values.firstWhere(
         (value) => value.name == momentPeople,
         orElse: () => defaults.momentPeople,
+      ),
+      shotPeople: MatchLevel.values.firstWhere(
+        (value) => value.name == shotPeople,
+        orElse: () => defaults.shotPeople,
       ),
       momentExpression: MomentExpression.values.firstWhere(
         (value) => value.name == expression,
@@ -351,6 +363,7 @@ class AppSettings {
       other.momentCount == momentCount &&
       other.momentVariety == momentVariety &&
       other.momentPeople == momentPeople &&
+      other.shotPeople == shotPeople &&
       other.momentExpression == momentExpression &&
       other.momentSeparateTypes == momentSeparateTypes &&
       other.momentShowScenes == momentShowScenes &&
@@ -379,6 +392,7 @@ class AppSettings {
     momentCount,
     momentVariety,
     momentPeople,
+    shotPeople,
     momentExpression,
     momentSeparateTypes,
     momentShowScenes,

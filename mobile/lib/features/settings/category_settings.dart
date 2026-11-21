@@ -263,10 +263,24 @@ List<Widget> bestShotSettingsChildren(AppSettings s, SettingsChanged change) => 
           settingsSwitch(
             title: 'Keep different people apart',
             subtitle:
-                'Keeps photos with different numbers of people, or a main person dressed in clearly different colours, in separate groups. A rough check, not face recognition. Needs "Use faces and eyes" on.',
+                'Keeps solo shots, couples and bigger groups in separate groups, and people dressed in clearly different colours apart. A rough check, not face recognition. Needs "Use faces and eyes" on.',
             value: s.splitByPeople,
             onChanged: (value) =>
                 change(s.copyWith(splitByPeople: value)),
+          ),
+          settingsChoice<MatchLevel>(
+            title: 'How closely clothing must match',
+            values: MatchLevel.values,
+            selected: s.shotPeople,
+            label: (level) => switch (level) {
+              MatchLevel.strict => 'Strict',
+              MatchLevel.balanced => 'Balanced',
+              MatchLevel.loose => 'Loose',
+            },
+            onSelected: (level) =>
+                change(s.copyWith(shotPeople: level)),
+            note:
+                'Strict keeps different people apart best but may split the same person who changed pose. Loose joins more but can mix people in similar colours. Used when "Keep different people apart" is on.',
           ),
           settingsSwitch(
             title: 'I choose which photos to keep',
@@ -563,11 +577,15 @@ class CategorySettingsPanel extends StatefulWidget {
     required this.category,
     required this.settings,
     required this.onChanged,
+    this.initiallyExpanded = false,
   });
 
   final SettingsCategory category;
   final AppSettings settings;
   final SettingsChanged onChanged;
+
+  /// Opens the panel at once, e.g. when arriving from "Change filter".
+  final bool initiallyExpanded;
 
   @override
   State<CategorySettingsPanel> createState() => _CategorySettingsPanelState();
@@ -580,6 +598,7 @@ class _CategorySettingsPanelState extends State<CategorySettingsPanel> {
   Widget build(BuildContext context) => CollapsiblePanel(
     leading: const Icon(Icons.tune, color: _green, size: 22),
     chevronAtEnd: true,
+    initiallyExpanded: widget.initiallyExpanded,
     title: Text(
       widget.category.filterTitle,
       style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
@@ -601,10 +620,10 @@ class _CategorySettingsPanelState extends State<CategorySettingsPanel> {
   );
 }
 
-/// The card at the top of every results screen: what was scanned, the filters
-/// that were used, and (when opened) the scan's facts and the editable
-/// filters. After a filter is changed it offers "Find again", because the
-/// change only applies to the next Find.
+/// The card at the top of every results screen: what was scanned and, when
+/// opened, the filters that were used (just the chosen ones, no options) with
+/// a "Change filter" button that goes back to the Find screen, where the
+/// filters can be edited.
 class ScanScopeCard extends StatefulWidget {
   const ScanScopeCard({
     super.key,
@@ -613,9 +632,7 @@ class ScanScopeCard extends StatefulWidget {
     required this.counts,
     required this.category,
     required this.settings,
-    required this.scannedWith,
-    required this.onChanged,
-    required this.onFindAgain,
+    required this.onChangeFilter,
     this.scannedLine,
     this.onViewFiles,
     this.menu,
@@ -641,10 +658,8 @@ class ScanScopeCard extends StatefulWidget {
   final SettingsCategory category;
   final AppSettings settings;
 
-  /// The settings the results on screen were found with.
-  final AppSettings scannedWith;
-  final SettingsChanged onChanged;
-  final VoidCallback onFindAgain;
+  /// Goes back to the Find screen with its filters open.
+  final VoidCallback onChangeFilter;
   final VoidCallback? onViewFiles;
 
   /// Shown at the right of the header, e.g. a ⋮ menu.
@@ -657,7 +672,6 @@ class ScanScopeCard extends StatefulWidget {
 
 class _ScanScopeCardState extends State<ScanScopeCard> {
   bool _open = false;
-  late AppSettings _s = widget.settings;
 
   Widget _fact(IconData icon, String text) => Padding(
     padding: const EdgeInsets.only(top: 8),
@@ -683,31 +697,37 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
     ),
   );
 
-  Widget _filterBody(bool changed) => Column(
+  /// The chosen filters only, then the way to change them.
+  Widget _selectedBody() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      CategorySettingsBody(
-        category: widget.category,
-        settings: _s,
-        inset: false,
-        onChanged: (value) {
-          setState(() => _s = value);
-          widget.onChanged(value);
-        },
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final part in settingsParts(widget.category, widget.settings))
+            _chip(part),
+        ],
       ),
-      if (changed) ...[
-        const SizedBox(height: 12),
-        FilledButton.icon(
-          onPressed: widget.onFindAgain,
-          icon: const Icon(Icons.refresh),
-          label: const Text('Find again with these filters'),
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+      const SizedBox(height: 12),
+      OutlinedButton.icon(
+        onPressed: widget.onChangeFilter,
+        icon: const Icon(Icons.tune, size: 18),
+        label: const Text('Change filter'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: _green,
+          side: const BorderSide(color: AppColors.tintBorder),
+          minimumSize: const Size.fromHeight(44),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800),
         ),
-      ],
+      ),
     ],
   );
 
-  Widget _compact(bool changed) => Padding(
+  Widget _compact() => Padding(
     padding: widget.margin,
     child: Material(
       color: Colors.white,
@@ -736,7 +756,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Change filter',
+                          'Selected filter',
                           style: TextStyle(
                             fontSize: 15,
                             height: 1.3,
@@ -745,7 +765,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                         ),
                         if (!_open)
                           Text(
-                            settingsSummary(widget.category, _s),
+                            settingsSummary(widget.category, widget.settings),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 12, color: _muted),
@@ -768,7 +788,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
           if (_open)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-              child: _filterBody(changed),
+              child: _selectedBody(),
             ),
         ],
       ),
@@ -777,8 +797,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
 
   @override
   Widget build(BuildContext context) {
-    final changed = _s != widget.scannedWith;
-    if (!widget.showScanDetails) return _compact(changed);
+    if (!widget.showScanDetails) return _compact();
     return Padding(
       padding: widget.margin,
       child: Material(
@@ -831,7 +850,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                                     ),
                                     const SizedBox(width: 4),
                                     const Text(
-                                      'Filters',
+                                      'Selected filter',
                                       style: TextStyle(
                                         fontSize: 12,
                                         fontWeight: FontWeight.w700,
@@ -877,7 +896,7 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                               children: [
                                 for (final part in settingsParts(
                                   widget.category,
-                                  _s,
+                                  widget.settings,
                                 ))
                                   _chip(part),
                               ],
@@ -916,30 +935,12 @@ class _ScanScopeCardState extends State<ScanScopeCard> {
                         ),
                       ),
                     const SizedBox(height: 6),
-                    Text(
-                      'Filters',
-                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    const Text(
+                      'Selected filter',
+                      style: TextStyle(fontWeight: FontWeight.w800),
                     ),
-                    CategorySettingsBody(
-                      category: widget.category,
-                      settings: _s,
-                      inset: false,
-                      onChanged: (value) {
-                        setState(() => _s = value);
-                        widget.onChanged(value);
-                      },
-                    ),
-                    if (changed) ...[
-                      const SizedBox(height: 12),
-                      FilledButton.icon(
-                        onPressed: widget.onFindAgain,
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Find again with these filters'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(46),
-                        ),
-                      ),
-                    ],
+                    const SizedBox(height: 8),
+                    _selectedBody(),
                   ],
                 ),
               ),

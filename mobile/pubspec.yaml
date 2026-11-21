@@ -70,6 +70,15 @@ flutter:
 
   assets:
     - assets/brand/pictoiq-icon.png
+    - assets/brand/pictoiq-wordmark-picto.png
+    - assets/brand/pictoiq-wordmark-iq.png
+
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-MediumItalic.ttf
+          weight: 500
+          style: italic
 
   # To add assets to your application, add an assets section, like this:
   # assets:

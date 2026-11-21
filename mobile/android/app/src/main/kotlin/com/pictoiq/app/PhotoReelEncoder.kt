@@ -213,17 +213,25 @@ internal class PhotoReelEncoder {
                         } else {
                             1f
                         }
-                        canvas.drawColor(Color.BLACK)
-                        if (isTransition) {
-                            drawPhoto(canvas, previous!!, 1f - transition, paint)
-                        }
-                        drawPhoto(canvas, current, transition, paint)
-                        if (photoIndex == 0 && title.isNotBlank()) {
-                            drawTitle(canvas, title, titleStyle)
+                        // Only the fade frames and the first frame of each photo
+                        // change the picture. The frames in between are the same
+                        // image, so the texture already on the GPU is drawn again
+                        // instead of repainting and re-uploading 1080x1920 pixels.
+                        val changed = isTransition || frameIndex == 0
+                        if (changed) {
+                            canvas.drawColor(Color.BLACK)
+                            if (isTransition) {
+                                drawPhoto(canvas, previous!!, 1f - transition, paint)
+                            }
+                            drawPhoto(canvas, current, transition, paint)
+                            if (photoIndex == 0 && title.isNotBlank()) {
+                                drawTitle(canvas, title, titleStyle)
+                            }
                         }
                         renderer.draw(
                             frame,
                             (photoIndex * framesPerPhoto + frameIndex) * FRAME_DURATION_NS,
+                            upload = changed,
                         )
                         completedFrames += 1
                         val percent = completedFrames * 100 / totalFrames
@@ -831,12 +839,14 @@ internal class PhotoReelEncoder {
             )
         }
 
-        fun draw(bitmap: Bitmap, presentationTimeNs: Long) {
+        fun draw(bitmap: Bitmap, presentationTimeNs: Long, upload: Boolean = true) {
             GLES20.glViewport(0, 0, width, height)
             GLES20.glUseProgram(program)
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture[0])
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            if (upload) {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+            }
             GLES20.glEnableVertexAttribArray(positionAttribute)
             GLES20.glVertexAttribPointer(
                 positionAttribute,
@@ -921,7 +931,7 @@ internal class PhotoReelEncoder {
         const val HEIGHT = 1920
         const val FRAME_RATE = 30
         const val MAX_DECODE_EDGE = 1920
-        const val BIT_RATE = 12_000_000
+        const val BIT_RATE = 8_000_000
         const val AUDIO_BIT_RATE = 192_000
         const val AUDIO_AAC_MIME = "audio/mp4a-latm"
         const val VIDEO_MUX_BUFFER_SIZE = 16 * 1024 * 1024

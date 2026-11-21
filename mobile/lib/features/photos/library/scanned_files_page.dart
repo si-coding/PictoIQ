@@ -16,9 +16,14 @@ class ScannedFilesPage extends StatefulWidget {
     super.key,
     required this.scan,
     required this.loadPreview,
+    this.groupLabels,
   });
 
   final FolderScanResult scan;
+
+  /// Badge text per photo ("Group 3") as the result screen shows it. When
+  /// null the groups are numbered in scan order.
+  final Map<String, String>? groupLabels;
 
   /// Loads a thumbnail for photos that were scanned without keeping one
   /// (exact-duplicate scans keep previews only for duplicates).
@@ -32,11 +37,21 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
   _Show _show = _Show.all;
   final Map<String, Future<Uint8List?>> _previews = {};
 
-  late final Map<String, int> _groupNumber = {
-    for (var i = 0; i < widget.scan.duplicateGroups.length; i++)
-      for (final photo in widget.scan.duplicateGroups[i].photos)
-        photo.uri: i + 1,
-  };
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  late final Map<String, String> _groupNumber =
+      widget.groupLabels ??
+      {
+        for (var i = 0; i < widget.scan.duplicateGroups.length; i++)
+          for (final photo in widget.scan.duplicateGroups[i].photos)
+            photo.uri: 'Group ${i + 1}',
+      };
 
   late final List<FolderScanPhoto> _photos = [...widget.scan.scannedPhotos]
     ..sort((a, b) {
@@ -89,7 +104,7 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
               ),
               Text(
                 '${_date(photo.modifiedAt)} · ${(photo.size / 1024).round()} KB'
-                '${_groupNumber[photo.uri] == null ? '' : ' · in group ${_groupNumber[photo.uri]}'}',
+                '${_groupNumber[photo.uri] == null ? '' : ' · in ${_groupNumber[photo.uri]}'}',
                 style: const TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 10),
@@ -117,6 +132,47 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  void _showSkipped() {
+    final names = widget.scan.skippedNames;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: .6,
+        maxChildSize: .9,
+        builder: (context, controller) => ListView(
+          controller: controller,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          children: [
+            const Text(
+              'Why photos were skipped',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'These files could not be read or are not an image PictoIQ can '
+              'open, for example a damaged file, a format Android cannot '
+              'decode, or a file that is too large. They are never grouped '
+              'or deleted.',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            if (names.isEmpty)
+              const Text('No file names were recorded.')
+            else
+              for (final name in names)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(name, style: const TextStyle(fontSize: 12)),
+                ),
+          ],
         ),
       ),
     );
@@ -182,7 +238,7 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        'Group $group',
+                        group,
                         style: const TextStyle(
                           fontSize: 10,
                           color: Colors.white,
@@ -229,7 +285,12 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
         actions: const [AppHomeButton()],
         title: const Text('Scanned files'),
       ),
-      body: CustomScrollView(
+      body: Scrollbar(
+        controller: _scroll,
+        interactive: true,
+        thumbVisibility: true,
+        child: CustomScrollView(
+        controller: _scroll,
         slivers: [
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
@@ -294,24 +355,30 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
                 itemBuilder: (context, index) => _tile(visible[index]),
               ),
             ),
-          if (scan.skippedNames.isNotEmpty)
+          if (scan.imagesSkipped > 0 || scan.skippedNames.isNotEmpty)
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                0,
+                16,
+                24 + MediaQuery.viewPaddingOf(context).bottom,
+              ),
               sliver: SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Skipped files (never grouped or deleted)',
-                      style: TextStyle(fontWeight: FontWeight.w700),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _showSkipped,
+                    icon: const Icon(Icons.info_outline, size: 18),
+                    label: Text(
+                      '${scan.imagesSkipped > 0 ? scan.imagesSkipped : scan.skippedNames.length} '
+                      'skipped photos · View reason',
                     ),
-                    for (final name in scan.skippedNames)
-                      Text(name, style: const TextStyle(fontSize: 12)),
-                  ],
+                  ),
                 ),
               ),
             ),
         ],
+        ),
       ),
     );
   }

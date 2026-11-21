@@ -154,8 +154,8 @@ void main() {
     });
   });
 
-  group('results Change filter panel', () {
-    Widget host({VoidCallback? onFindAgain, ValueChanged<AppSettings>? onChanged}) =>
+  group('results Selected filter panel', () {
+    Widget host({VoidCallback? onChangeFilter}) =>
         MaterialApp(
           home: Scaffold(
             body: SingleChildScrollView(
@@ -166,40 +166,33 @@ void main() {
                 counts: '143 photos scanned · 3 groups',
                 category: SettingsCategory.bestMoments,
                 settings: const AppSettings(),
-                scannedWith: const AppSettings(),
-                onChanged: onChanged ?? (_) {},
-                onFindAgain: onFindAgain ?? () {},
+                onChangeFilter: onChangeFilter ?? () {},
               ),
             ),
           ),
         );
 
-    testWidgets('is just a collapsed Change filter row', (tester) async {
+    testWidgets('is just a collapsed Selected filter row', (tester) async {
       await tester.pumpWidget(host());
-      expect(find.text('Change filter'), findsOneWidget);
+      expect(find.text('Selected filter'), findsOneWidget);
+      expect(find.text('Change filter'), findsNothing);
       expect(find.text('Scan details'), findsNothing);
-      expect(find.text('Camera · Last 7 days'), findsNothing);
       expect(find.text('Which photos to include'), findsNothing);
     });
 
-    testWidgets('opens to the filters and offers Find again after a change', (
+    testWidgets('opens to the chosen filters and a Change filter button', (
       tester,
     ) async {
-      var again = 0;
-      await tester.pumpWidget(host(onFindAgain: () => again++));
-      await tester.tap(find.text('Change filter'));
+      var changed = 0;
+      await tester.pumpWidget(host(onChangeFilter: () => changed++));
+      await tester.tap(find.text('Selected filter'));
       await tester.pumpAndSettle();
-      expect(find.text('Which photos to include'), findsOneWidget);
+      expect(find.text('Which photos to include'), findsNothing);
+      expect(find.byType(FilterChip), findsNothing);
       expect(find.text('This scan'), findsNothing);
-      expect(find.text('Find again with these filters'), findsNothing);
 
-      await tester.tap(find.widgetWithText(FilterChip, 'Scenery'));
-      await tester.pumpAndSettle();
-      final button = find.text('Find again with these filters');
-      await tester.ensureVisible(button);
-      await tester.pumpAndSettle();
-      await tester.tap(button);
-      expect(again, 1);
+      await tester.tap(find.text('Change filter'));
+      expect(changed, 1);
     });
   });
 }

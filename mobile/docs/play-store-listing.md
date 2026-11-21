@@ -19,12 +19,12 @@ Collect memories, not clutter. PictoIQ looks through an album you choose, finds 
 - Review before sharing: see every photo on a preview screen first, remove any you do not want to send, and choose the order.
 - Favourites are protected: photos you starred in your gallery are never suggested for clean-up.
 - "Why is this here?": tap the info button on a photo to see how PictoIQ judged it.
-- Exact duplicates: finds identical photo copies and keeps the oldest.
+- Exact photos: finds identical photo copies and keeps the oldest.
 - Gallery cleanup (clutter): finds screenshots, documents, slides and objects, blank or dark, unclear people photos, blurry and tiny photos so you can clear them out in one go.
 - Scans look at up to 500 photos at a time (the newest in your chosen album and dates). The home screen shows how much storage is free.
 - Private by design: your photos are analysed on your phone and never uploaded. Nothing is shared until you review it on the preview screen, where you can remove any photo. No account. No ads.
 
-Do not promise that sensitive or illegal pictures are found: the app has no automatic sensitive-picture check; you review what is shared on the preview screen. In Best shots, Exact duplicates and Clutter, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
+Do not promise that sensitive or illegal pictures are found: the app has no automatic sensitive-picture check; you review what is shared on the preview screen. In Best shots, Exact photos and Gallery cleanup, photos are deleted only after you confirm, and deleted photos cannot be restored by the app, so check the list before you confirm.
 
 **Category:** Photography (or Tools). **Tags:** photo cleaner, duplicate photos, best shot.
 

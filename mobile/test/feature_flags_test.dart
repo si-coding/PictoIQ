@@ -39,6 +39,12 @@ void main() {
       // The first Play release is photo-only, so videos are off by default.
       expect(FeatureFlags.defaultVideoEnabled, isFalse);
     });
+
+    test('the All date range is a developer option, off by default', () {
+      expect(FeatureFlags.defaultAllDatesEnabled, isFalse);
+      expect(FeatureFlags.current.allDatesEnabled, isFalse);
+      expect(const FeatureFlags(allDatesEnabled: true).allDatesEnabled, isTrue);
+    });
   });
 
   group('Settings page', () {

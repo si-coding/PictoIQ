@@ -908,6 +908,10 @@ class FolderDuplicateScanner {
     /// False for the clutter scan, which only needs each photo's
     /// measurements and skips grouping the photos.
     bool groupShots = true,
+
+    /// Whether a clearly good photo with nothing similar to it is listed as a
+    /// group of its own (Best moments does; Best shots does not).
+    bool includeLoneShots = true,
     bool groupSessions = false,
     SimilarityThresholds? thresholds,
     DocumentMode documentMode = DocumentMode.leaveOut,
@@ -1217,6 +1221,7 @@ class FolderDuplicateScanner {
             documentMode,
             contentFilter,
             sensitiveUris,
+            includeLoneShots: includeLoneShots,
           ),
         );
       }
@@ -1414,7 +1419,10 @@ class FolderDuplicateScanner {
         return null;
       }
       final photos = await PhotoManager.getAssetCount(type: RequestType.image);
-      final videos = await PhotoManager.getAssetCount(type: RequestType.video);
+      // A photo-only build has no video permission, so it does not count them.
+      final videos = FeatureFlags.current.videoEnabled
+          ? await PhotoManager.getAssetCount(type: RequestType.video)
+          : 0;
       final paths = await _albumPaths();
       return (
         photos: photos,
@@ -1693,8 +1701,9 @@ class FolderDuplicateScanner {
     SimilarityThresholds thresholds,
     DocumentMode documentMode,
     ContentFilter contentFilter,
-    Set<String> sensitive,
-  ) {
+    Set<String> sensitive, {
+    bool includeLoneShots = true,
+  }) {
     final images = [
       for (final photo in allImages)
         if (!_leftOut(photo, documentMode, contentFilter, sensitive)) photo,
@@ -1729,7 +1738,8 @@ class FolderDuplicateScanner {
       // A photo with nothing similar to it is still a best shot or moment of
       // its own, when it is clearly good.
       for (var i = 0; i < images.length; i++)
-        if (!grouped.contains(i) &&
+        if (includeLoneShots &&
+            !grouped.contains(i) &&
             images[i].features != null &&
             isClearlyGood(images[i].features!))
           _rankedGroup(

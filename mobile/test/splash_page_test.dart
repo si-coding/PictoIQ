@@ -9,8 +9,8 @@ void main() {
         home: SplashPage(next: (_) => const Scaffold(body: Text('home'))),
       ),
     );
-    expect(find.text('picto'), findsOneWidget);
-    expect(find.text('iq'), findsOneWidget);
+    expect(find.byKey(const ValueKey('wordmark-picto')), findsOneWidget);
+    expect(find.byKey(const ValueKey('wordmark-iq')), findsOneWidget);
     expect(find.text('home'), findsNothing);
 
     // The slide-in runs, then the screen waits briefly before moving on.
@@ -18,6 +18,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     await tester.pumpAndSettle();
     expect(find.text('home'), findsOneWidget);
-    expect(find.text('picto'), findsNothing);
+    expect(find.byKey(const ValueKey('wordmark-picto')), findsNothing);
   });
 }
