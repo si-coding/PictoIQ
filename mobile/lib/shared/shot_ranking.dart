@@ -192,6 +192,7 @@ class FaceSignals {
     required this.eyesOpenMin,
     required this.smileAverage,
     this.edgeCutoff = false,
+    this.sunglassesCount = 0,
     this.lookingAwayMax,
     this.subjectColors,
     this.personColors,
@@ -214,6 +215,14 @@ class FaceSignals {
 
   /// Average smile probability (0-1) over the faces that report one.
   final double? smileAverage;
+
+  /// How many faces wear dark sunglasses. Their eye-open readings are left out
+  /// of [eyesOpenMin] (the detector cannot see through the lenses), and the
+  /// ranking does not mark them as blinking.
+  final int sunglassesCount;
+
+  /// True when at least one face wears sunglasses.
+  bool get hasSunglasses => sunglassesCount > 0;
 
   /// True when a face touches or runs past the edge of the picture, which
   /// usually means someone's head is cut off.
@@ -432,6 +441,18 @@ const _faultPenalty = 20;
 
 // Faults that rule a photo out as the one to keep.
 const _closedEyes = 0.4;
+
+// Eye score given to a face in sunglasses: the eyes cannot be seen, so they are
+// treated as open rather than as a blink.
+const _sunglassesEyes = 0.85;
+
+/// The eye-open value other code should use for a photo: the measured one, or
+/// a good one when sunglasses hide the eyes, or null when unknown.
+double? effectiveEyesOpen(FaceSignals? faces) {
+  if (faces == null) return null;
+  return faces.eyesOpenMin ?? (faces.hasSunglasses ? _sunglassesEyes : null);
+}
+
 const _lookingAwayDegrees = 30.0;
 const _blurRatio = 0.35;
 const _washedOutShare = 0.15;
@@ -453,23 +474,61 @@ const loneShotMinExposure = 80.0;
 /// a face that is in focus and looking at the camera. Used for photos that
 /// have no similar shots to be ranked against, so only the clearly good ones
 /// are offered as a best shot or moment.
-bool isClearlyGood(ShotFeatures features) {
+bool isClearlyGood(ShotFeatures features) =>
+    loneShotProblems(features).isEmpty;
+
+/// Why a photo, judged on its own, is not clearly good, in plain words. Empty
+/// when it is. Used by [isClearlyGood] and to explain to the person why a
+/// photo that has no similar shots was not offered as a best shot or moment.
+List<String> loneShotProblems(ShotFeatures features) {
+  final problems = <String>[];
   final signals = features.signals;
-  if (signals.isBlank) return false;
-  if (signals.sharpness < loneShotMinSharpness) return false;
-  if (signals.exposureScore < loneShotMinExposure) return false;
-  if (signals.highlightClip > 0.05 || signals.shadowClip > 0.2) return false;
+  if (signals.isBlank) {
+    return ['The photo is almost blank (very dark or very bright).'];
+  }
+  if (signals.sharpness < loneShotMinSharpness) {
+    problems.add('It looks soft or slightly blurred.');
+  }
+  if (signals.exposureScore < loneShotMinExposure) {
+    problems.add('The light is uneven (too dark or too bright overall).');
+  }
+  if (signals.highlightClip > 0.05) {
+    problems.add('Parts of it are washed out by bright light.');
+  }
+  if (signals.shadowClip > 0.2) {
+    problems.add('Large parts of it are lost in shadow.');
+  }
   final faces = features.faces;
   if (faces != null && faces.hasProminentFace) {
     final eyes = faces.eyesOpenMin;
-    if (eyes != null && eyes < 0.5) return false;
-    if (faces.edgeCutoff) return false;
+    if (eyes != null && eyes < 0.5) {
+      problems.add('Someone\'s eyes look closed.');
+    }
+    if (faces.edgeCutoff) problems.add('Someone is cut off at the edge.');
     final away = faces.lookingAwayMax;
-    if (away != null && away > _lookingAwayDegrees) return false;
-    if (faces.isUnclearSubject()) return false;
+    if (away != null && away > _lookingAwayDegrees) {
+      problems.add('Someone is looking away from the camera.');
+    }
+    if (faces.isUnclearSubject()) {
+      problems.add('The main person is out of focus.');
+    }
+  } else {
+    // No face big enough to judge. If the labeller still sees people (what
+    // they wear or do), this is a photo of people with their backs turned or
+    // far away, which is not a good photo to offer on its own.
+    final labels = features.labels;
+    if (labels != null && peopleCueScore(labels) >= _peopleCueMin) {
+      problems.add(
+        'People are in the picture but no face is clearly visible (turned away or too far).',
+      );
+    }
   }
-  return true;
+  return problems;
 }
+
+// How sure the labeller must be about clothing or posture to say people are
+// in a photo that has no face big enough to judge.
+const _peopleCueMin = 0.55;
 
 // A face this much softer than the sharpest face in the group is out of focus.
 const _faceBlurRatio = 0.35;
@@ -481,6 +540,17 @@ const _exposureWeight = 20.0;
 const _resolutionWeight = 10.0;
 const _faceWeight = 30.0;
 const _faceFocusWeight = 15.0;
+
+/// How the face score is split between everyone's eyes being open, smiles and
+/// everyone being in the frame, for a scene whose fullest photo shows [people]
+/// faces. One person can really smile, so smiles count for a lot; in a large
+/// group almost nobody gets everyone smiling at once, so open eyes and nobody
+/// missing from the frame decide instead. Each row adds up to 1.
+({double eyes, double smile, double presence}) faceMix(int people) {
+  if (people <= 1) return (eyes: 0.50, smile: 0.40, presence: 0.10);
+  if (people == 2) return (eyes: 0.55, smile: 0.25, presence: 0.20);
+  return (eyes: 0.55, smile: 0.10, presence: 0.35);
+}
 
 /// Ranks photos of the same scene and explains why.
 ///
@@ -556,10 +626,14 @@ GroupRanking rankShots(List<ShotInput> inputs) {
     if (useFaces) {
       final faces = features.faces!;
       if (faces.count > 0) {
-        final eyes = faces.eyesOpenMin ?? 0.5;
+        // Sunglasses are a style choice, not a blink: count the eyes as fine.
+        final eyes = faces.eyesOpenMin ?? (faces.hasSunglasses ? _sunglassesEyes : 0.5);
         final smile = faces.smileAverage ?? 0.5;
         final presence = faces.count / maxFaces;
-        points += _faceWeight * (0.55 * eyes + 0.25 * smile + 0.20 * presence);
+        final mix = faceMix(maxFaces);
+        points +=
+            _faceWeight *
+            (mix.eyes * eyes + mix.smile * smile + mix.presence * presence);
         if (useFaceFocus) {
           points += _faceFocusWeight * math.sqrt(faceFocusRatio(faces));
         }
@@ -627,11 +701,22 @@ GroupRanking rankShots(List<ShotInput> inputs) {
         concerns.add('No face found (other shots show $maxFaces)');
       } else {
         final eyes = faces.eyesOpenMin;
-        if (eyes != null && eyes < 0.4) {
+        if (!faces.hasProminentFace) {
+          // A face a fraction of a percent of the picture cannot be judged,
+          // so no claim about eyes either way.
+          concerns.add('Faces are too small to judge eyes or expression');
+        } else if (eyes != null && eyes < 0.4) {
           concerns.add('Someone may have their eyes closed');
         } else if (eyes != null && eyes >= 0.65) {
           strengths.add(
             faces.count == 1 ? 'Eyes look open' : 'Everyone’s eyes look open',
+          );
+        }
+        if (faces.hasSunglasses) {
+          strengths.add(
+            faces.sunglassesCount == 1
+                ? 'Sunglasses on, so eyes are not judged'
+                : 'Sunglasses on, so those eyes are not judged',
           );
         }
         if (useFaceFocus) {
@@ -645,7 +730,7 @@ GroupRanking rankShots(List<ShotInput> inputs) {
           }
         }
         final smile = faces.smileAverage;
-        if (smile != null && smile >= 0.55) {
+        if (faces.hasProminentFace && smile != null && smile >= 0.55) {
           strengths.add(faces.count == 1 ? 'Smiling' : 'Mostly smiling');
         }
         if (faces.count < maxFaces) {

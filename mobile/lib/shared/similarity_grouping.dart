@@ -485,6 +485,7 @@ class SimilarityThresholds {
     this.maxPlaceMeters = 0,
     this.attachRelax = 1.0,
     this.peopleHistDistance = 0,
+    this.requireSamePeople = false,
   });
 
   /// Groups photos by what is in them, ignoring when they were taken or
@@ -550,8 +551,9 @@ class SimilarityThresholds {
     bool splitByPeople = true,
     TimeMode timeMode = TimeMode.off,
     MatchLevel? people,
+    bool samePeople = false,
   }) {
-    final faces = splitByPeople ? 2 : 1000;
+    final faces = splitByPeople ? (samePeople ? 1 : 2) : 1000;
     // How closely clothing must match is its own choice, so "loose" photo
     // matching can still keep different people apart.
     final subject = !splitByPeople
@@ -568,9 +570,11 @@ class SimilarityThresholds {
           burstHashDistance: 10,
           burstColorDistance: 0.15,
           maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         ),
         MatchLevel.balanced => SimilarityThresholds(
           maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         ),
         MatchLevel.loose => SimilarityThresholds(
           maxLinkDistance: 12,
@@ -578,6 +582,7 @@ class SimilarityThresholds {
           burstHashDistance: 16,
           burstColorDistance: 0.3,
           maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         ),
       };
     }
@@ -595,6 +600,7 @@ class SimilarityThresholds {
         mediumDistance: link + 8,
         isSession: true,
         maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
       );
     }
     return switch (level) {
@@ -608,6 +614,7 @@ class SimilarityThresholds {
         mediumDistance: 14,
         mediumLayoutDistance: 0.09,
         maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         maxSubjectDistance: subject,
         splitComposition: splitByPeople,
         peopleHistDistance: 0.12,
@@ -626,6 +633,7 @@ class SimilarityThresholds {
         highDistance: 4,
         mediumDistance: 20,
         maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         maxSubjectDistance: subject,
         splitComposition: splitByPeople,
         // Require stronger clothing and scene colour agreement before using
@@ -648,6 +656,7 @@ class SimilarityThresholds {
         mediumDistance: 26,
         mediumLayoutDistance: 0.16,
         maxFaceCountDifference: faces,
+        requireSamePeople: splitByPeople && samePeople,
         maxSubjectDistance: subject,
         splitComposition: splitByPeople,
         peopleHistDistance: 0.24,
@@ -666,6 +675,13 @@ class SimilarityThresholds {
   /// more than this (see [histogramDistance]) are never grouped. 1.0 turns
   /// the check off. A weak stand-in for telling people apart.
   final double maxSubjectDistance;
+
+  /// Best shots "Same people only": with faces in the picture, two photos are
+  /// grouped only when there is evidence they show the same people (matching
+  /// clothing colours, or a near-identical frame), never on a matching
+  /// background alone. Stricter than [maxSubjectDistance] by itself, which
+  /// lets a pair through when one photo has no clothing colours to compare.
+  final bool requireSamePeople;
 
   /// Content mode: a pair also links when its position-free colour profiles
   /// match within [histLinkDistance] and its colour layouts within
@@ -1153,6 +1169,44 @@ bool clothingConflict(
 /// compared, with no time window, so a copied-in photo can match one taken
 /// years earlier. Quadratic in the number of photos, which is fine for a
 /// phone folder of a few thousand.
+/// How much tighter the clothing test is with "same people only".
+const _samePeopleLimitScale = 0.65;
+
+/// Splits [group] into parts where every pair of members is compatible, so a
+/// chain of look-alikes cannot join different people. Members with the most
+/// direct links seed the parts, which keeps the biggest consistent set whole.
+List<List<int>> _partitionByCompatibility(
+  List<int> group,
+  List<Set<int>> links,
+  bool Function(int, int) compatible,
+) {
+  if (group.length < 3) {
+    return group.length == 2 && !compatible(group[0], group[1])
+        ? [
+            [group[0]],
+            [group[1]],
+          ]
+        : [group];
+  }
+  final ordered = [...group]
+    ..sort((a, b) {
+      final byLinks = links[b].length.compareTo(links[a].length);
+      return byLinks != 0 ? byLinks : a.compareTo(b);
+    });
+  final parts = <List<int>>[];
+  for (final member in ordered) {
+    final home = parts.indexWhere(
+      (part) => part.every((other) => compatible(member, other)),
+    );
+    if (home >= 0) {
+      parts[home].add(member);
+    } else {
+      parts.add([member]);
+    }
+  }
+  return [for (final part in parts) part..sort()];
+}
+
 List<SimilarityCluster> _clusterByContent(
   List<SimilarityCandidate> candidates,
   SimilarityThresholds thresholds,
@@ -1217,6 +1271,13 @@ List<SimilarityCluster> _clusterByContent(
           compositionsConflict(earlierFaces, currentFaces)) {
         return false;
       }
+      // A person in one photo and nobody in the other is a different picture.
+      if (thresholds.requireSamePeople &&
+          earlierFaces != null &&
+          currentFaces != null &&
+          (earlierFaces == 0) != (currentFaces == 0)) {
+        return false;
+      }
       final distance = hammingDistance(earlier.visualHash, current.visualHash);
       if (earlier.isDocument || current.isDocument) {
         // Pages of text look alike at low resolution, so a document links
@@ -1241,7 +1302,12 @@ List<SimilarityCluster> _clusterByContent(
       if (thresholds.maxSubjectDistance < 1.0) {
         bool noClothes(SimilarityCandidate c) =>
             (c.faceCount ?? 0) > 0 && !(c.people?.isNotEmpty ?? false);
-        if (noClothes(earlier) != noClothes(current)) {
+        // With "same people only" a pair that has faces but no clothing to
+        // compare on either side is held to the same near-identical test.
+        final lacksEvidence = thresholds.requireSamePeople
+            ? noClothes(earlier) || noClothes(current)
+            : noClothes(earlier) != noClothes(current);
+        if (lacksEvidence) {
           final la = earlier.colorLayout;
           final lb = current.colorLayout;
           return distance <= thresholds.noLayoutHashDistance &&
@@ -1276,7 +1342,8 @@ List<SimilarityCluster> _clusterByContent(
       // swap places, turn around or hold something that covers their clothes.
       final subjectLimit = trusted
           ? math.min(1.0, thresholds.maxSubjectDistance * 1.6)
-          : thresholds.maxSubjectDistance;
+          : thresholds.maxSubjectDistance *
+                (thresholds.requireSamePeople ? _samePeopleLimitScale : 1.0);
       if (clothingConflict(earlier.people, current.people, subjectLimit)) {
         return false;
       }
@@ -1367,6 +1434,35 @@ List<SimilarityCluster> _clusterByContent(
       groups,
       (i, j) => linkedPair(i, j, thresholds.attachRelax),
     );
+  }
+  if (thresholds.requireSamePeople) {
+    // Links chain: A matches B and B matches C, so A and C end up together
+    // even when they show different people. With "same people only" every
+    // pair of photos with faces in a group must itself be a match.
+    bool sameOrUnknown(int i, int j) {
+      final a = candidates[order[i]];
+      final b = candidates[order[j]];
+      if ((a.faceCount ?? 0) == 0 || (b.faceCount ?? 0) == 0) return true;
+      if (linkedPair(i, j)) return true;
+      final peopleA = a.people;
+      final peopleB = b.people;
+      if (peopleA == null ||
+          peopleB == null ||
+          peopleA.isEmpty ||
+          peopleB.isEmpty) {
+        return false;
+      }
+      return !clothingConflict(
+        peopleA,
+        peopleB,
+        thresholds.maxSubjectDistance * _samePeopleLimitScale,
+      );
+    }
+
+    groups = [
+      for (final group in groups)
+        ..._partitionByCompatibility(group, links, sameOrUnknown),
+    ];
   }
   return [
     for (final group in groups)

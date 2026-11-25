@@ -35,6 +35,7 @@ import 'package:pictoiq_mobile/shared/sensitive_content.dart'
     show sensitiveThreshold;
 import 'package:pictoiq_mobile/shared/shot_ranking.dart';
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
+import 'package:pictoiq_mobile/shared/sunglasses.dart';
 
 class _ShotAnalysis {
   const _ShotAnalysis({
@@ -834,6 +835,7 @@ class FolderDuplicateScanner {
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,
+      enableLandmarks: true,
       performanceMode: FaceDetectorMode.accurate,
     ),
   );
@@ -1446,6 +1448,13 @@ class FolderDuplicateScanner {
   /// True when a photo must not appear in best shot results: a document (when
   /// documents are left out) or, with the content filter on, anything that is
   /// not people or scenery.
+  /// Whether a scan with these filters leaves [photo] out before grouping.
+  static bool isLeftOut(
+    FolderScanPhoto photo,
+    DocumentMode documentMode,
+    ContentFilter contentFilter,
+  ) => _leftOut(photo, documentMode, contentFilter);
+
   static bool _leftOut(
     FolderScanPhoto photo,
     DocumentMode documentMode,
@@ -1543,6 +1552,7 @@ class FolderDuplicateScanner {
       var smileTotal = 0.0;
       var smileCount = 0;
       var edgeCutoff = false;
+      var sunglasses = 0;
       var largestFace = 0.0;
       double? lookingAwayMax;
       final size = (width, height);
@@ -1565,10 +1575,26 @@ class FolderDuplicateScanner {
               ? turn
               : math.max(lookingAwayMax, turn);
         }
-        final eyes = [
-          face.leftEyeOpenProbability,
-          face.rightEyeOpenProbability,
-        ].whereType<double>();
+        // Dark glasses hide the eyes, so the detector's eye reading is not
+        // trusted for that face.
+        final leftEye = face.landmarks[FaceLandmarkType.leftEye]?.position;
+        final rightEye = face.landmarks[FaceLandmarkType.rightEye]?.position;
+        final glasses = leftEye != null &&
+            rightEye != null &&
+            eyesHiddenBySunglasses(
+              rgba,
+              width,
+              height,
+              leftEye: (leftEye.x.toDouble(), leftEye.y.toDouble()),
+              rightEye: (rightEye.x.toDouble(), rightEye.y.toDouble()),
+            );
+        if (glasses) sunglasses++;
+        final eyes = glasses
+            ? const <double>[]
+            : [
+                face.leftEyeOpenProbability,
+                face.rightEyeOpenProbability,
+              ].whereType<double>();
         for (final eye in eyes) {
           eyesOpenMin = eyesOpenMin == null ? eye : math.min(eyesOpenMin, eye);
         }
@@ -1637,6 +1663,7 @@ class FolderDuplicateScanner {
         eyesOpenMin: eyesOpenMin,
         smileAverage: smileCount == 0 ? null : smileTotal / smileCount,
         edgeCutoff: edgeCutoff,
+        sunglassesCount: sunglasses,
         lookingAwayMax: lookingAwayMax,
         largestFaceArea: largestFace / (width * height),
         faceSharpness: faceSharpness,

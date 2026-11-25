@@ -44,6 +44,12 @@ List<String> explainPhoto(FolderScanPhoto photo) {
     }
     final eyes = faces.eyesOpenMin;
     if (eyes != null) lines.add('Eyes open (lowest): ${_percent(eyes)}.');
+    if (faces.hasSunglasses) {
+      lines.add(
+        'Sunglasses on ${faces.sunglassesCount} face(s): their eyes are not '
+        'judged, so the look is not counted as a blink.',
+      );
+    }
     final away = faces.lookingAwayMax;
     if (away != null) {
       lines.add('Head turned away by up to ${away.round()} degrees.');

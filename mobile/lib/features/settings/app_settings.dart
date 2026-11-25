@@ -33,6 +33,7 @@ class AppSettings {
     this.groupSessions = false,
     this.matchLevel = MatchLevel.balanced,
     this.splitByPeople = true,
+    this.shotSamePeople = true,
     this.showEvents = true,
     this.timeMode = TimeMode.off,
     this.documentMode = DocumentMode.leaveOut,
@@ -75,6 +76,10 @@ class AppSettings {
 
   /// Keep photos with clearly different numbers of people in separate groups.
   final bool splitByPeople;
+
+  /// Best shots: group photos only when there is evidence they show the same
+  /// people, never on a matching background alone.
+  final bool shotSamePeople;
 
   /// Show event headings (by camera time or a date in the file name) above
   /// the groups in the results.
@@ -144,6 +149,7 @@ class AppSettings {
     bool? groupSessions,
     MatchLevel? matchLevel,
     bool? splitByPeople,
+    bool? shotSamePeople,
     bool? showEvents,
     TimeMode? timeMode,
     DocumentMode? documentMode,
@@ -170,6 +176,7 @@ class AppSettings {
     groupSessions: groupSessions ?? this.groupSessions,
     matchLevel: matchLevel ?? this.matchLevel,
     splitByPeople: splitByPeople ?? this.splitByPeople,
+    shotSamePeople: shotSamePeople ?? this.shotSamePeople,
     showEvents: showEvents ?? this.showEvents,
     timeMode: timeMode ?? this.timeMode,
     documentMode: documentMode ?? this.documentMode,
@@ -198,6 +205,7 @@ class AppSettings {
     'groupSessions': groupSessions,
     'matchLevel': matchLevel.name,
     'splitByPeople': splitByPeople,
+    'shotSamePeople': shotSamePeople,
     'showEvents': showEvents,
     'timeMode': timeMode.name,
     'documentMode': documentMode.name,
@@ -229,6 +237,7 @@ class AppSettings {
     final sessions = json['groupSessions'];
     final level = json['matchLevel'];
     final people = json['splitByPeople'];
+    final samePeople = json['shotSamePeople'];
     final events = json['showEvents'];
     final time = json['timeMode'];
     final documents = json['documentMode'];
@@ -264,6 +273,9 @@ class AppSettings {
         orElse: () => defaults.matchLevel,
       ),
       splitByPeople: people is bool ? people : defaults.splitByPeople,
+      shotSamePeople: samePeople is bool
+          ? samePeople
+          : defaults.shotSamePeople,
       showEvents: events is bool ? events : defaults.showEvents,
       timeMode: TimeMode.values.firstWhere(
         (value) => value.name == time,
@@ -355,6 +367,7 @@ class AppSettings {
       other.groupSessions == groupSessions &&
       other.matchLevel == matchLevel &&
       other.splitByPeople == splitByPeople &&
+      other.shotSamePeople == shotSamePeople &&
       other.showEvents == showEvents &&
       other.timeMode == timeMode &&
       other.documentMode == documentMode &&
@@ -384,6 +397,7 @@ class AppSettings {
     groupSessions,
     matchLevel,
     splitByPeople,
+    shotSamePeople,
     showEvents,
     timeMode,
     documentMode,

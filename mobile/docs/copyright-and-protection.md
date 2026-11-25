@@ -49,6 +49,6 @@ to make copying hard and to be able to act when it happens.
 
 ## Version and build number
 
-The version is the `version:` line in `pubspec.yaml`: `1.0.0+1` means version
-1.0.0, build 1. Play needs a higher build number (the part after the `+`) for
+The version is the `version:` line in `pubspec.yaml`: `1.0.0+3` means version
+1.0.0, build 3. Play needs a higher build number (the part after the `+`) for
 every upload, even for the same version. The app shows both under Privacy.

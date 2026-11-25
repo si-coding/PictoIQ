@@ -17,7 +17,12 @@ class ScannedFilesPage extends StatefulWidget {
     required this.scan,
     required this.loadPreview,
     this.groupLabels,
+    this.whyNotGrouped,
   });
+
+  /// Plain-language reasons a photo is not in any group (main reason first).
+  /// When given, photos that are not grouped show an (i) button.
+  final List<String> Function(FolderScanPhoto photo)? whyNotGrouped;
 
   final FolderScanResult scan;
 
@@ -123,12 +128,67 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
                     child: Image.memory(bytes, fit: BoxFit.contain),
                   ),
                 ),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Close'),
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (_groupNumber[photo.uri] == null &&
+                      widget.whyNotGrouped != null)
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.pop(dialogContext);
+                        _showWhy(photo);
+                      },
+                      icon: const Icon(Icons.info_outline, size: 18),
+                      label: const Text('Why not grouped?'),
+                    ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Close'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showWhy(FolderScanPhoto photo) {
+    final reasons = widget.whyNotGrouped?.call(photo) ?? const <String>[];
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Why this photo is not grouped',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                photo.relativePath,
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 10),
+              if (reasons.isEmpty)
+                const Text('No reason was recorded for this photo.')
+              else
+                for (final reason in reasons)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text(reason, style: const TextStyle(fontSize: 14)),
+                  ),
+              const SizedBox(height: 8),
+              const Text(
+                'Nothing is deleted or changed. This only explains what the scan did.',
+                style: TextStyle(fontSize: 12),
               ),
             ],
           ),
@@ -224,6 +284,27 @@ class _ScannedFilesPageState extends State<ScannedFilesPage> {
                     },
                   ),
                 ),
+                if (group == null && widget.whyNotGrouped != null)
+                  Positioned(
+                    right: 2,
+                    bottom: 2,
+                    child: Material(
+                      color: Colors.white70,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => _showWhy(photo),
+                        child: const Padding(
+                          padding: EdgeInsets.all(5),
+                          child: Icon(
+                            Icons.info_outline,
+                            size: 18,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 if (group != null)
                   Positioned(
                     left: 4,

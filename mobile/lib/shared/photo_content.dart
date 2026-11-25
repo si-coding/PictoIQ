@@ -19,6 +19,28 @@ const peopleLabels = {
   'hug', 'kiss',
 };
 
+/// Labels that point to a person being in the picture even when the labeller
+/// does not say "person": what they wear or do. A photo of people seen from
+/// behind often has these and no face.
+const peopleCueLabels = {
+  'sitting', 'standing', 'jacket', 'hat', 'cap', 'sun hat', 'outerwear',
+  'clothing', 'sleeve', 't-shirt', 'shorts', 'jeans', 'dress', 'footwear',
+  'sportswear', 'jersey', 'sports uniform', 'uniform', 'fashion', 'denim',
+  'headgear', 'costume',
+};
+
+/// The strongest people-cue label, 0 when there is none.
+double peopleCueScore(List<PhotoLabel> labels) {
+  var top = 0.0;
+  for (final label in labels) {
+    if (peopleCueLabels.contains(label.name.toLowerCase()) &&
+        label.confidence > top) {
+      top = label.confidence;
+    }
+  }
+  return top;
+}
+
 /// Names for places and nature.
 const sceneryLabels = {
   'sky', 'cloud', 'mountain', 'sea', 'ocean', 'beach', 'lake', 'river',

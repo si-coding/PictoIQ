@@ -39,13 +39,16 @@ import 'package:pictoiq_mobile/features/photos/library/date_range_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/photo_viewer_page.dart';
 import 'package:pictoiq_mobile/features/photos/library/scanned_files_page.dart';
 import 'package:pictoiq_mobile/features/scan/scan_configuration_page.dart';
+import 'package:pictoiq_mobile/features/scan/scan_time_note.dart';
+import 'package:pictoiq_mobile/shared/grouping_explain.dart';
 import 'package:pictoiq_mobile/features/photos/best_shot/selection_policy.dart';
 import 'package:pictoiq_mobile/features/settings/settings_page.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates.dart';
 import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates_page.dart';
 import 'package:pictoiq_mobile/features/videos/export/reel_configuration_page.dart';
 import 'package:pictoiq_mobile/features/videos/library/video_album_picker_page.dart';
-import 'package:pictoiq_mobile/shared/shot_ranking.dart' show RankedShot;
+import 'package:pictoiq_mobile/shared/shot_ranking.dart'
+    show RankedShot, effectiveEyesOpen;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
 
 /// What the main scan button on the home screen does.
@@ -323,6 +326,9 @@ class _LibraryPageState extends State<LibraryPage> {
   /// When the running scan started, and a timer that redraws the elapsed
   /// time while the folder is being read.
   DateTime? _scanStartedAt;
+
+  /// When the analysing step began (all photos listed); drives the time-left
+  /// estimate on the scan button.
   Timer? _elapsedTimer;
   FolderScanResult? _folderScan;
   FolderScanResult? _bestShotsScan;
@@ -419,7 +425,7 @@ class _LibraryPageState extends State<LibraryPage> {
               group.ranking?.shotFor(photo.uri)?.isDisqualified ?? false,
           faceCount: photo.features?.faces?.count,
           smile: photo.features?.faces?.smileAverage,
-          eyesOpen: photo.features?.faces?.eyesOpenMin,
+          eyesOpen: effectiveEyesOpen(photo.features?.faces),
           edgeCutoff: photo.features?.faces?.edgeCutoff ?? false,
           visualHash: photo.visualHash,
           colorLayout: photo.colorLayout,
@@ -1077,7 +1083,7 @@ class _LibraryPageState extends State<LibraryPage> {
     _scanProgressRevision.value++;
     _elapsedTimer?.cancel();
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted || !_scanActive || _folderImagesTotal != null) {
+      if (!mounted || !_scanActive) {
         timer.cancel();
       } else {
         setState(() {});
@@ -1099,7 +1105,9 @@ class _LibraryPageState extends State<LibraryPage> {
         },
         onTotal: (total) {
           if (mounted) {
-            setState(() => _folderImagesTotal = total);
+            setState(() {
+              _folderImagesTotal = total;
+            });
             _scanProgressRevision.value++;
           }
         },
@@ -1437,7 +1445,7 @@ class _LibraryPageState extends State<LibraryPage> {
     });
     _elapsedTimer?.cancel();
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted || !_scanActive || _folderImagesTotal != null) {
+      if (!mounted || !_scanActive) {
         timer.cancel();
       } else {
         setState(() {});
@@ -1468,6 +1476,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 _settings.matchLevel,
                 splitByPeople: _settings.splitByPeople,
                 people: _settings.shotPeople,
+                samePeople: _settings.shotSamePeople,
                 timeMode: _settings.timeMode,
               ),
         documentMode: _settings.documentMode,
@@ -1499,7 +1508,9 @@ class _LibraryPageState extends State<LibraryPage> {
                 .inSeconds;
           }
           if (mounted) {
-            setState(() => _folderImagesTotal = total);
+            setState(() {
+              _folderImagesTotal = total;
+            });
             _scanProgressRevision.value++;
           }
         },
@@ -1586,14 +1597,8 @@ class _LibraryPageState extends State<LibraryPage> {
         if (result.duplicateGroups.isNotEmpty) {
           unawaited(_scrollToResults(bestShots: bestShots));
         }
-        _showResultPopup(
-          result.duplicateGroups.isEmpty
-              ? _noGroupsText(result, bestShots: bestShots)
-              : bestShots
-              ? 'Found ${result.duplicateGroups.length} similar-photo groups in ${result.folderName}. They are similar, not identical, so review them before deleting.${_skippedNote(result.imagesSkipped)}${_documentNote(result)}'
-              : 'Found ${result.duplicateGroups.length} exact duplicate groups in ${result.folderName}.${_skippedNote(result.imagesSkipped)}',
-          found: result.duplicateGroups.isNotEmpty,
-        );
+        // No pop-up: an empty result opens on its own screen with things to
+        // try next (see _noResultsCard).
       }
       completed = true;
     } on ScanCancelled {
@@ -2370,8 +2375,7 @@ class _LibraryPageState extends State<LibraryPage> {
       listingFraction = elapsed.inSeconds / expectedSeconds;
     }
     listingFraction = listingFraction?.clamp(0.0, 0.95);
-    final clock =
-        '${elapsed.inMinutes}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
+    final clock = scanClock(elapsed);
 
     final noun = _scanningVideos ? 'videos' : 'photos';
     final String label;
@@ -2396,9 +2400,11 @@ class _LibraryPageState extends State<LibraryPage> {
           ? 1.0
           : (_folderImagesScanned / total).clamp(0.0, 1.0);
       value = fraction;
-      label = _scanningVideos
-          ? 'Comparing videos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total'
-          : 'Analyzing photos… ${(fraction * 100).floor()}% · $_folderImagesScanned of $total';
+      // The clock ticks every second so the button never looks stuck.
+      label =
+          '${_scanningVideos ? 'Comparing videos' : 'Analyzing photos'}… '
+          '${(fraction * 100).floor()}% · $_folderImagesScanned of $total'
+          ' · $clock';
     }
     return Semantics(
       label: label,
@@ -4235,7 +4241,10 @@ class _LibraryPageState extends State<LibraryPage> {
         // What was scanned and with which filters comes first, so the rest of
         // the page is read in that context.
         _scopeStrip(scan, bestShots: bestShots, groupLabel: groupLabel),
-        _resultsHeader(scan, bestShots: bestShots, groupLabel: groupLabel),
+        // An empty result has its own card with the explanation and next steps,
+        // so the "Nothing found" header is not repeated above it.
+        if (scan.duplicateGroups.isNotEmpty || _freedBytes > 0)
+          _resultsHeader(scan, bestShots: bestShots, groupLabel: groupLabel),
         if (scan.duplicateGroups.isNotEmpty &&
             !bestShots &&
             _scanRemovals(scan, bestShots: false).isNotEmpty)
@@ -4251,25 +4260,7 @@ class _LibraryPageState extends State<LibraryPage> {
             ),
           ),
         if (scan.duplicateGroups.isEmpty)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: const Color(0xFFE6E8E0)),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                _freedBytes > 0
-                    ? 'Everything in this scan has been reviewed. Tap Home to scan another folder.'
-                    : bestShots
-                    ? 'No similar photo groups found. PictoIQ groups visually alike shots taken close together and ranks face quality when faces are detected.'
-                    : 'No exact duplicate photos found. Exact duplicates have identical file contents.',
-                style: TextStyle(color: AppColors.hint),
-              ),
-            ),
-          )
+          _noResultsCard(scan, bestShots: bestShots)
         else ...[
           SizedBox(
             key: bestShots ? _bestResultsKey : _exactResultsKey,
@@ -4466,6 +4457,182 @@ class _LibraryPageState extends State<LibraryPage> {
     return used.length;
   }
 
+  void _openScannedFiles(FolderScanResult scan, {required bool bestShots}) =>
+      Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ScannedFilesPage(
+          scan: scan,
+          loadPreview: _folderScanner.loadPreview,
+          whyNotGrouped: (photo) => explainUngrouped(
+            photo: photo,
+            tool: !bestShots
+                ? UngroupedTool.exactDuplicates
+                : _moments
+                ? UngroupedTool.bestMoments
+                : UngroupedTool.bestShots,
+            documentMode: (_resultsScanSettings ?? _settings).documentMode,
+            contentFilter: (_resultsScanSettings ?? _settings).contentFilter,
+          ),
+          groupLabels:
+              scan.duplicateGroups.isNotEmpty &&
+                  scan.duplicateGroups.every(
+                    (group) => group.photos.every(
+                      (photo) => _shownGroupLabels.containsKey(photo.uri),
+                    ),
+                  )
+              ? _shownGroupLabels
+              : null,
+        ),
+      ),
+    );
+
+  /// The screen shown when a scan finds nothing: what was scanned, why that
+  /// may be, and things to try next, so the person is never left at a dead end.
+  Widget _noResultsCard(FolderScanResult scan, {required bool bestShots}) {
+    if (_freedBytes > 0) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: const Color(0xFFE6E8E0)),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            'Everything in this scan has been reviewed. Tap Home to scan another folder.',
+            style: TextStyle(color: AppColors.hint),
+          ),
+        ),
+      );
+    }
+    final mode = _resultsMode;
+    final settings = _resultsScanSettings ?? _settings;
+    final canLoosen =
+        bestShots &&
+        !_moments &&
+        settings.matchLevel != MatchLevel.loose;
+    final looser = settings.matchLevel == MatchLevel.strict
+        ? MatchLevel.balanced
+        : MatchLevel.loose;
+    final canWiden = _folderDateRange != FolderDateRange.currentFolder;
+
+    Widget action(IconData icon, String label, String hint, VoidCallback tap) =>
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: OutlinedButton(
+            onPressed: tap,
+            style: OutlinedButton.styleFrom(
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 22),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(hint, style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xFFE6E8E0)),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Center(
+              child: Icon(Icons.search_off_outlined, size: 40, color: _green),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Nothing to show this time',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _noGroupsText(scan, bestShots: bestShots),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.hint),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Try one of these:',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            if (canLoosen)
+              action(
+                Icons.tune,
+                'Try ${looser.label.toLowerCase()} matching',
+                'Groups shots with more differences. You review before anything is deleted.',
+                () {
+                  unawaited(
+                    _updateSettings(settings.copyWith(matchLevel: looser)),
+                  );
+                  _backToBrowse(mode);
+                  _showMessage(
+                    'Matching is now ${looser.label}. Tap Scan to try again.',
+                  );
+                },
+              ),
+            if (canWiden)
+              action(
+                Icons.date_range_outlined,
+                'Use a longer date range',
+                'Now: ${scan.rangeDescription}. Pick new dates, then scan again.',
+                () async {
+                  final picked = await _selectDateRange(FolderDateRange.custom);
+                  if (picked != null && mounted) _backToBrowse(mode);
+                },
+              ),
+            action(
+              Icons.photo_album_outlined,
+              'Choose another album',
+              'Scanned: ${scan.folderName}. Pick another, then scan again.',
+              () async {
+                final chosen = await _chooseFolder();
+                if (chosen != null && mounted) _backToBrowse(mode);
+              },
+            ),
+            action(
+              Icons.apps_outlined,
+              'Try another tool',
+              'Best moments, Best shots, Exact photos or Gallery cleanup.',
+              _goHome,
+            ),
+            if (scan.scannedPhotos.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              TextButton.icon(
+                onPressed: () => _openScannedFiles(scan, bestShots: bestShots),
+                icon: const Icon(Icons.info_outline, size: 18),
+                label: const Text('See why photos were not grouped'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _resultsHeader(
     FolderScanResult scan, {
     required bool bestShots,
@@ -4514,23 +4681,7 @@ class _LibraryPageState extends State<LibraryPage> {
       style: const TextStyle(fontSize: 12.5, color: AppColors.body),
     );
     final category = _categoryForResults(bestShots);
-    void viewFiles() => Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ScannedFilesPage(
-          scan: scan,
-          loadPreview: _folderScanner.loadPreview,
-          groupLabels:
-              scan.duplicateGroups.isNotEmpty &&
-                  scan.duplicateGroups.every(
-                    (group) => group.photos.every(
-                      (photo) => _shownGroupLabels.containsKey(photo.uri),
-                    ),
-                  )
-              ? _shownGroupLabels
-              : null,
-        ),
-      ),
-    );
+    void viewFiles() => _openScannedFiles(scan, bestShots: bestShots);
     final headline = groups == 0
         ? (_freedBytes > 0 ? 'All done' : 'Nothing found')
         : _moments

@@ -268,6 +268,14 @@ List<Widget> bestShotSettingsChildren(AppSettings s, SettingsChanged change) => 
             onChanged: (value) =>
                 change(s.copyWith(splitByPeople: value)),
           ),
+          settingsSwitch(
+            title: 'Same people only',
+            subtitle:
+                'Groups photos only when there is evidence they show the same people (matching clothing, or a near-identical frame), never on a matching background alone. May split a photo of the same person if their clothes cannot be read. Needs "Keep different people apart" on.',
+            value: s.shotSamePeople,
+            onChanged: (value) =>
+                change(s.copyWith(shotSamePeople: value)),
+          ),
           settingsChoice<MatchLevel>(
             title: 'How closely clothing must match',
             values: MatchLevel.values,

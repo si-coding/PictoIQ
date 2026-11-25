@@ -1,14 +1,14 @@
 # PictoIQ: Google Play release checklist
 
-Last reviewed: 21 November 2026. Items marked (you) need your accounts or devices. This file also holds the status and the open follow-ups (it replaces `code-review-2026-11-11.md`).
+Last reviewed: 25 November 2026. Items marked (you) need your accounts or devices. This file also holds the status and the open follow-ups (it replaces `code-review-2026-11-11.md`).
 
 ## Status at a glance
 
 **Done in the code and docs (photo-only first release)**
-- Package id `com.pictoiq.app`, upload-key signing through `android/key.properties`, R8 rules for ML Kit, `1.0.0+1`.
+- Package id `com.pictoiq.app`, upload-key signing through `android/key.properties`, R8 rules for ML Kit, `1.0.0+3` (build 1 and 2 are on Internal testing; see `CHANGELOG.md`).
 - Photo-only build: `PICTOIQ_VIDEO` is off by default and READ_MEDIA_VIDEO is commented out of the manifest (re-checked 21 Nov: it was active in the working copy, now fixed; confirm your own `AndroidManifest.xml` has it commented out before building).
 - Tools: Best moments, Best shots, Exact photos, Gallery cleanup; share 9 / reel 9 / scan 500 (`lib/core/config/app_limits.dart`); no sensitive-photo detector and no private marks (the listing and policy say so).
-- Best shots defaults: keep several photos per group, Balanced matching, ignore time taken, People and scenery, documents left out, faces and eyes on, keep different people apart on, clothing Balanced. Single shots are not listed.
+- Best shots defaults: keep several photos per group, Balanced matching, ignore time taken, People and scenery, documents left out, faces and eyes on, keep different people apart on, same people only on, clothing Balanced. Single shots are not listed.
 - Screens: Selected filter / Change filter on every results screen, custom date range page (Apply with a tick at the left, close at the right), date chips Today / 7 days / 30 days / Custom dates (the All chip needs `--dart-define=PICTOIQ_ALL_DATES=true`), view scanned files with group numbers, skipped-photo reasons, new logo, icon and splash.
 - Docs drafted and the privacy policy hosted: privacy policy, store listing text, Data safety answers (checked against Google's ML Kit disclosure on 16 Nov), permission declaration wording, copyright notes, `docs/store/play-icon-512.png`.
 
@@ -121,7 +121,7 @@ Organisation accounts (with a D-U-N-S number) skip the 12-tester rule.
 
 ## Version, copyright and contact
 
-- **Version and build number.** The `version:` line in `pubspec.yaml` (now `1.0.0+1`: version 1.0.0, build 1). Every Play upload needs a higher build number than the last, even for the same version, so raise the number after the `+` each time. The app shows both in Privacy.
+- **Version and build number.** The `version:` line in `pubspec.yaml` (now `1.0.0+3`: version 1.0.0, build 3). Every Play upload needs a higher build number than the last, even for the same version, so raise the number after the `+` each time. The app shows both in Privacy.
 - **Copyright.** See `docs/copyright-and-protection.md`; `LICENSE`, the notice in the Privacy dialog and the Open-source licences page are in the app. Edit `lib/core/config/app_info.dart` to change the owner name or contact email.
 - **Contact email.** pictoiq@gmail.com in the privacy policy, the app and the store listing (Play Console, Store settings > Store listing contact details).
 - **Installing for tests.** Install the normal APK (`flutter build apk --release --split-per-abi`, then the arm64 one) on a phone. The `.aab` cannot be installed directly; it is only uploaded to Play.
