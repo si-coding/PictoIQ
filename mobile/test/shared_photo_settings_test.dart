@@ -90,9 +90,8 @@ void main() {
     });
   });
 
-  group('settings shared by Best moments and Best shots', () {
+  group('settings shared by Best shots and Exact photos', () {
     for (final category in [
-      SettingsCategory.bestMoments,
       SettingsCategory.bestShot,
       SettingsCategory.duplicates,
     ]) {
@@ -112,6 +111,22 @@ void main() {
       });
     }
 
+    testWidgets('Best moments are about people: an information panel, no chips', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _body(SettingsCategory.bestMoments, const AppSettings(), (_) {}),
+      );
+      expect(find.text('Which photos to include'), findsNothing);
+      expect(find.text('Always about people'), findsOneWidget);
+      expect(find.byType(FilterChip), findsNothing);
+      expect(find.text('Scenery'), findsNothing);
+      expect(
+        find.text('Documents and screenshots of pages'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('Best moments no longer has a separate no-people switch', (
       tester,
     ) async {
@@ -127,7 +142,7 @@ void main() {
       AppSettings? saved;
       await tester.pumpWidget(
         _body(
-          SettingsCategory.bestMoments,
+          SettingsCategory.duplicates,
           const AppSettings(),
           (s) => saved = s,
         ),
@@ -146,10 +161,24 @@ void main() {
       expect(saved?.contentFilter, ContentFilter.everything);
     });
 
-    test('the moments summary names the content choice', () {
+    test('the Best shots summary names the content choice', () {
+      expect(
+        settingsSummary(SettingsCategory.bestShot, const AppSettings()),
+        contains('People and scenery'),
+      );
+    });
+
+    test('the moments summary says People, whatever the shared filter is', () {
       expect(
         settingsSummary(SettingsCategory.bestMoments, const AppSettings()),
-        contains('People and scenery'),
+        contains('People'),
+      );
+      expect(
+        settingsSummary(
+          SettingsCategory.bestMoments,
+          const AppSettings(contentFilter: ContentFilter.sceneryOnly),
+        ),
+        isNot(contains('Scenery')),
       );
     });
   });

@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'package:pictoiq_mobile/shared/app_menu_button.dart';
-import 'package:pictoiq_mobile/shared/app_bar_title.dart';
 import 'package:pictoiq_mobile/shared/app_background.dart';
 import 'package:pictoiq_mobile/shared/app_back_button.dart';
 import 'package:pictoiq_mobile/features/settings/app_settings.dart';
@@ -43,10 +41,19 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) => AppScaffold(
     appBar: AppBar(
+      automaticallyImplyLeading: false,
       leading: const AppBackButton(),
       leadingWidth: appBackButtonWidth,
-      title: const AppBarTitle(icon: Icons.settings_outlined, title: 'Settings'),
-      actions: const [AppMenuButton(showSettings: false)],
+      centerTitle: true,
+      title: const Text(
+        'Settings',
+        style: TextStyle(
+          fontSize: 21,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -.2,
+          color: AppColors.ink,
+        ),
+      ),
     ),
     body: SafeArea(
       child: ListView(

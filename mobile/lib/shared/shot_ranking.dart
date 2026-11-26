@@ -530,6 +530,99 @@ List<String> loneShotProblems(ShotFeatures features) {
 // in a photo that has no face big enough to judge.
 const _peopleCueMin = 0.55;
 
+/// Face sharpness a best moment's photo must reach. Stricter than the default
+/// of [FaceSignals.isUnclearSubject], because a moment is labelled "best".
+/// Tune these on a real gallery.
+const momentMinFaceSharpness = 6.0;
+
+/// A face this much softer than the rest of an in-focus picture is not clear
+/// enough for a best moment.
+const momentFaceSharpnessRatio = 0.15;
+
+const _eyesClosedProblem = 'Someone\'s eyes look closed.';
+
+/// For a best moment: an eye-open reading below this is closed whatever else
+/// is true (0.15 = 15%).
+const momentClosedEyes = 0.15;
+
+/// An eye-open reading below this counts as closed only when nobody is
+/// smiling much; a smile or glasses can lower the reading without a blink.
+const momentSoftEyes = 0.5;
+
+/// Average smile (0-1) from which a fairly low eye reading is forgiven.
+const momentSmilingEyesOk = 0.5;
+
+/// Smallest share of the picture the largest face must fill for a best moment
+/// (0.006 = 0.6%) when the photo shows one person. Full-length photos have
+/// small faces, so this is low; it only rules out someone far away or mostly
+/// hidden. Tune this on a real gallery.
+const momentMinFaceAreaSingle = 0.006;
+
+/// The same for a photo of two or more people (couples and groups are about
+/// the people together, so each face may be smaller).
+const momentMinFaceAreaGroup = 0.004;
+
+/// Why a photo cannot be a best moment, in plain words. Empty when it can.
+///
+/// A best moment is about people, so the photo must show at least one clearly
+/// visible, in-focus person whose face fills at least [momentMinFaceAreaSingle] (one person) or
+/// [momentMinFaceAreaGroup] (two or more), and must also pass [loneShotProblems] (focus,
+/// light, open eyes, nothing cut off, looking at the camera). Scenery and
+/// photos where nobody can be seen clearly are never a best moment.
+List<String> momentProblems(ShotFeatures? features) {
+  if (features == null) {
+    return ['PictoIQ could not measure the photo, so it cannot be a best moment.'];
+  }
+  final faces = features.faces;
+  if (faces == null || !faces.hasProminentFace) {
+    return ['No person can be seen clearly, and a best moment needs one.'];
+  }
+  final area = faces.largestFaceArea;
+  final minArea = faces.count >= 2
+      ? momentMinFaceAreaGroup
+      : momentMinFaceAreaSingle;
+  if (area != null && area < minArea) {
+    return [
+      'The largest face fills only ${(area * 100).toStringAsFixed(1)}% of the '
+          'picture; a best moment needs at least '
+          '${(minArea * 100).toStringAsFixed(1)}% '
+          '(${faces.count >= 2 ? "two or more people" : "one person"}).',
+    ];
+  }
+  // The eye reading is the lowest of every eye of every face, and it is
+  // unreliable for glasses, big smiles (squinting) and small faces. For a best
+  // moment, treat eyes as closed only when the reading is clearly low, or
+  // fairly low while nobody is smiling. Best shots keep the stricter check.
+  final problems = <String>[
+    for (final problem in loneShotProblems(features))
+      if (problem != _eyesClosedProblem) problem,
+  ];
+  final eyes = faces.eyesOpenMin;
+  if (eyes != null) {
+    final smile = faces.smileAverage ?? 0;
+    if (eyes < momentClosedEyes ||
+        (eyes < momentSoftEyes && smile < momentSmilingEyesOk)) {
+      problems.add(
+        'Someone\'s eyes look closed (lowest eye-open reading '
+        '${(eyes * 100).round()}%, smiling ${(smile * 100).round()}%).',
+      );
+    }
+  }
+  if (faces.isUnclearSubject(
+        minSharpness: momentMinFaceSharpness,
+        ratio: momentFaceSharpnessRatio,
+      ) &&
+      !problems.contains('The main person is out of focus.')) {
+    problems.add('The main person is not sharp enough.');
+  }
+  return problems;
+}
+
+/// Whether a photo can be a best moment: it shows a clearly visible person and
+/// has no quality problems. See [momentProblems].
+bool isMeaningfulMoment(ShotFeatures? features) =>
+    momentProblems(features).isEmpty;
+
 // A face this much softer than the sharpest face in the group is out of focus.
 const _faceBlurRatio = 0.35;
 

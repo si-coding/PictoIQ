@@ -1762,13 +1762,14 @@ class FolderDuplicateScanner {
         _rankedGroup([
           for (final index in cluster.members) images[index],
         ], cluster.evidence),
-      // A photo with nothing similar to it is still a best shot or moment of
-      // its own, when it is clearly good.
+      // A photo with nothing similar to it is still a best moment of its own,
+      // when it shows a clearly visible person and has no quality problems
+      // (see isMeaningfulMoment).
       for (var i = 0; i < images.length; i++)
         if (includeLoneShots &&
             !grouped.contains(i) &&
             images[i].features != null &&
-            isClearlyGood(images[i].features!))
+            isMeaningfulMoment(images[i].features))
           _rankedGroup(
             [images[i]],
             const SimilarityEvidence(

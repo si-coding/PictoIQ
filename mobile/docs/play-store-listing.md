@@ -12,9 +12,9 @@ Collect memories, not clutter. Find your best photos and share them.
 **Full description (max 4000):**
 Collect memories, not clutter. PictoIQ looks through an album you choose, finds your best photos and moments, and helps you share them with family and friends or clear out copies.
 
-- Best moments: finds the best shots of the same moment or event, picked for quality and variety (not three near-identical shots), with people first. Photos where a person is out of focus, or where the focus landed on something else, are not chosen. Choose how long a moment lasts, how many photos to show and whether smiles or candid shots count more.
+- Best moments: finds the best shots of the same moment or event, picked for quality and variety (not three near-identical shots), every best moment needs a clearly visible, in-focus person, so scenery and photos where nobody can be seen clearly are not shown. Photos where a person is out of focus, or where the focus landed on something else, are not chosen. Choose how long a moment lasts, how many photos to show and whether smiles or candid shots count more.
 - Best shots: keeps the best of similar clicks and explains the pick. Faces in focus, open eyes and smiles count most, then sharpness, exposure and resolution.
-- One set of filters for both: include people, scenery or both, and decide what happens with documents and screenshots.
+- One set of filters for Best shots and Exact photos: include people, scenery or both (Best moments always needs a clearly visible person), and decide what happens with documents and screenshots.
 - Share and reels: pick up to 9 best shots or moments, preview them, remove any you do not want to send and put them in the order you like. Share to WhatsApp, Instagram or Facebook, or turn them into a short vertical reel with a title and your own music, built on your phone.
 - Review before sharing: see every photo on a preview screen first, remove any you do not want to send, and choose the order.
 - Favourites are protected: photos you starred in your gallery are never suggested for clean-up.

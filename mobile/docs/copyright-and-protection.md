@@ -10,10 +10,10 @@ Property Office of New Zealand) about anything important, such as a trademark.
   or most countries. The notice (`© 2026 PictoIQ. All rights reserved.`) is
   not required, but it removes any excuse. It is in `LICENSE`, in the app
   (Privacy dialog) and in `lib/core/config/app_info.dart`.
-- Parts you did not write keep their own licences (Flutter, ML Kit, the
-  and so on). Their licences
+- Parts you did not write keep their own licenses (Flutter, ML Kit, the
+  and so on). Their licenses
   usually require the notice to be shipped with the app: the app's
-  "Open-source licences" page (Privacy dialog) does that automatically.
+  "Open-source licenses" page (Privacy dialog) does that automatically.
 - Check that images, fonts and music inside the app are yours or licensed for
   commercial use.
 
@@ -49,6 +49,6 @@ to make copying hard and to be able to act when it happens.
 
 ## Version and build number
 
-The version is the `version:` line in `pubspec.yaml`: `1.0.0+3` means version
-1.0.0, build 3. Play needs a higher build number (the part after the `+`) for
+The version is the `version:` line in `pubspec.yaml`: `1.0.0+4` means version
+1.0.0, build 4. Play needs a higher build number (the part after the `+`) for
 every upload, even for the same version. The app shows both under Privacy.

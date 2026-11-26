@@ -74,7 +74,7 @@ The home screen has a Photos | Videos switch with four video tiles. **Exact vide
 
 `features/settings/category_settings.dart` holds the controls for each tool (`SettingsCategory`, `settingsChildrenFor`) so the same widgets are used by the Settings page, by a tool's Find screen (`ScanConfigurationPage.settingsPanel`, collapsible, above the date range) and above results (`CollapsiblePanel` in the scope strip of the similar-photo results, and in `ClutterPage` / `VideoDuplicatesPage` via `settingsPanel`). Every change goes through `_updateSettings`, so it is saved at once and used by the next Find. Result screens also have a search icon (`onFind`) that opens the tool's Find screen. Scan buttons are labelled "Find …". Tested in `test/category_settings_test.dart`.
 
-Browse, Choose an album and results screens have a round back arrow at the top left (`AppBackButton`, shared/app_back_button.dart) and a centred title. On the results screens the back arrow opens the tool's Find screen again (`_backToBrowse`; Gallery cleanup uses `onFind`) and the search icon at the top right does the same; Share, Create reel and the review screens have a Home icon at the top right instead of a menu. Until PictoIQ can see the photos, Home shows a "Your memories are waiting." banner (`_howItWorks`) in place of the library numbers, and the privacy line sits below it (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
+Browse, Choose an album and results screens have a round back arrow at the top left (`AppBackButton`, shared/app_back_button.dart) and a centred title. On the results screens the back arrow opens the tool's Find screen again, after a "Leave these results?" question when there are groups to lose (`_leaveResults`, then `_backToBrowse`; the same question appears for the search icon, "Change filter" and the system Back, which `PopScope` in `_LibraryPageState.build` intercepts while results are shown; results cannot be reopened, a new scan is needed; Gallery cleanup uses `onFind`) and the search icon at the top right does the same; Share, Create reel and the review screens have a Home icon at the top right instead of a menu. Until PictoIQ can see the photos, Home shows a "Your memories are waiting." banner (`_howItWorks`) in place of the library numbers, and the privacy line sits below it (`popUntil(isFirst)`, or `_showResultsPage = false` for the inline results). `AppMenuActions.goHome` (set by `LibraryPage`) closes all routes above the home screen and hides the results page, so Home always lands on the home screen even when a Find screen was opened from the results. The Android back gesture still goes back one screen.
 
 After a scan, results that were found open directly with no pop-up; only "nothing found" shows a short notice that closes itself after four seconds. Every results screen (best moments, best shot, exact duplicates, clutter, exact duplicate videos) starts with `ScanScopeCard` ("Selected filter"): a short header (folder · range, counts) that expands to the filters that were used, as chips only, and a "Change filter" button that returns to the Find screen with its Change filter panel open (`_backToBrowse(expandFilters: true)`). There are no "Find again" buttons. The home header shows Photos, Videos (when videos are enabled) and Albums totals, with "100% on device" as a line below them.
 
@@ -127,9 +127,18 @@ Best Moments, Best Shots and Duplicate photos share the same two choices
   out of focus is also left out whenever people are wanted.
 - **Documents and screenshots of pages**: unchanged.
 
-Best Moments hides moments with no people unless Scenery is on
-(`ContentFilter.includesScenery`); the old "Show moments with no people" switch
-is gone (the stored `momentShowScenes` value is still honoured).
+Best Moments does not use this filter. It always scans with
+`peopleAndScenery` (`_momentContentFilter` in `main.dart`), whatever Best shots
+and Exact photos are set to, and then lists a moment only when its best photo
+passes `isMeaningfulMoment` in `shared/shot_ranking.dart`: a clearly visible,
+in-focus person (the largest face fills at least 0.6% of the picture for one
+person, 0.4% for two or more) and no quality problems, even for a lone photo.
+Scenery is never a best moment. Its Settings panel shows an information panel,
+"Always about people" (`momentPeopleNote`, not a chip, so it does not look like a
+control), and only the Documents and screenshots choice. The old
+"Show moments with no people" switch is gone and the stored `momentShowScenes`
+value is no longer used. `momentProblems` gives the plain-language reasons shown
+under "Why this photo is not grouped".
 
 ### Results page layout
 

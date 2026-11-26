@@ -48,8 +48,13 @@ import 'package:pictoiq_mobile/features/videos/duplicates/video_duplicates_page.
 import 'package:pictoiq_mobile/features/videos/export/reel_configuration_page.dart';
 import 'package:pictoiq_mobile/features/videos/library/video_album_picker_page.dart';
 import 'package:pictoiq_mobile/shared/shot_ranking.dart'
-    show RankedShot, effectiveEyesOpen;
+    show RankedShot, effectiveEyesOpen, isMeaningfulMoment;
 import 'package:pictoiq_mobile/shared/similarity_grouping.dart';
+
+/// Best moments always scan for people (and what is around them), whatever
+/// "Which photos to include" is set to for Best shots and Exact photos. The
+/// results are then narrowed to photos with a clearly visible person.
+const _momentContentFilter = ContentFilter.peopleAndScenery;
 
 /// What the main scan button on the home screen does.
 enum ScanMode { bestShot, bestMoments, duplicates, clutter }
@@ -558,6 +563,36 @@ class _LibraryPageState extends State<LibraryPage> {
   void _backToBrowse(ScanMode mode, {bool expandFilters = false}) {
     if (_showResultsPage) setState(() => _showResultsPage = false);
     unawaited(_openPhotoConfiguration(mode, expandFilters: expandFilters));
+  }
+
+  /// Back, the search icon or "Change filter" on the results. The results
+  /// cannot be reopened once they are closed (a new scan is needed, which can
+  /// take a while), so ask first when there is something to lose.
+  Future<void> _leaveResults({bool expandFilters = false}) async {
+    final scan = _resultsAreBestShots ? _bestShotsScan : _folderScan;
+    if (scan != null && scan.duplicateGroups.isNotEmpty) {
+      final leave = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Leave these results?'),
+          content: const Text(
+            'Going back closes this list. To see it again you will need to scan again, which can take a while. Share or create a reel first if you want to keep a photo.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Stay'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Leave'),
+            ),
+          ],
+        ),
+      );
+      if (leave != true || !mounted) return;
+    }
+    _backToBrowse(_resultsMode, expandFilters: expandFilters);
   }
 
   /// Photo, video and album totals for the home header; null until access to
@@ -1486,6 +1521,8 @@ class _LibraryPageState extends State<LibraryPage> {
             ? (_settings.clutterOff.contains(ClutterKind.screenOrObject)
                   ? ContentFilter.everything
                   : ContentFilter.peopleAndScenery)
+            : moments
+            ? _momentContentFilter
             : _settings.contentFilter,
         dateRange: _folderDateRange,
         rangeFrom: _customRange?.start,
@@ -1539,12 +1576,14 @@ class _LibraryPageState extends State<LibraryPage> {
                 if (photo.features?.signals.isBlank ?? false) photo.uri,
           });
         }
-        if (moments &&
-            !(_settings.momentShowScenes ||
-                _settings.contentFilter.includesScenery)) {
+        if (moments) {
+          // A best moment is about people. Whatever the content filter says,
+          // a moment is listed only when its best photo shows a clearly
+          // visible person and has no quality problems; scenery and weak
+          // single photos are left out.
           result = result.withoutGroups({
             for (final group in result.duplicateGroups)
-              if (group.photos.every((p) => p.features?.faces?.count == 0))
+              if (!isMeaningfulMoment(group.bestFirst.first.features))
                 group.id,
           });
         }
@@ -2617,7 +2656,17 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) => PopScope(
+    // The results are part of this page, so the system Back would otherwise
+    // close them (or the app) without asking.
+    canPop: !(_tab == 0 && !_scanActive && _showResultsPage),
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) unawaited(_leaveResults());
+    },
+    child: _homeScaffold(),
+  );
+
+  Widget _homeScaffold() => Scaffold(
     // The Library tab remains hidden for now; bottom destinations control the
     // media mode and, for the results on screen, Share and Create reel.
     body: _tab == 0 && !_scanActive && _showResultsPage
@@ -2950,7 +2999,7 @@ class _LibraryPageState extends State<LibraryPage> {
                 width: appBackButtonWidth,
                 child: AppBackButton(
                   enabled: !_scanningFolder,
-                  onPressed: () => _backToBrowse(_resultsMode),
+                  onPressed: () => unawaited(_leaveResults()),
                 ),
               ),
               Expanded(
@@ -2973,7 +3022,7 @@ class _LibraryPageState extends State<LibraryPage> {
                   tooltip: 'Find in another folder or range',
                   onPressed: _scanningFolder
                       ? null
-                      : () => _backToBrowse(_resultsMode),
+                      : () => unawaited(_leaveResults()),
                   icon: const Icon(Icons.manage_search, size: 26),
                 ),
               ),
@@ -4471,7 +4520,9 @@ class _LibraryPageState extends State<LibraryPage> {
                 ? UngroupedTool.bestMoments
                 : UngroupedTool.bestShots,
             documentMode: (_resultsScanSettings ?? _settings).documentMode,
-            contentFilter: (_resultsScanSettings ?? _settings).contentFilter,
+            contentFilter: bestShots && _moments
+                ? _momentContentFilter
+                : (_resultsScanSettings ?? _settings).contentFilter,
           ),
           groupLabels:
               scan.duplicateGroups.isNotEmpty &&
@@ -4931,7 +4982,7 @@ class _LibraryPageState extends State<LibraryPage> {
         '${scan.imagesScanned} photos scanned · ${scan.duplicateGroups.length} $groupLabel',
     category: _categoryForResults(bestShots),
     settings: _resultsScanSettings ?? _settings,
-    onChangeFilter: () => _backToBrowse(_resultsMode, expandFilters: true),
+    onChangeFilter: () => unawaited(_leaveResults(expandFilters: true)),
   );
 
   Future<void> _showScanDetails(
@@ -6495,7 +6546,7 @@ class _LibraryPageState extends State<LibraryPage> {
             applicationName: AppInfo.name,
             applicationLegalese: AppInfo.copyright,
           ),
-          child: const Text('Open-source licences'),
+          child: const Text('Open-source licenses'),
         ),
         TextButton(
           onPressed: () => Navigator.pop(context),

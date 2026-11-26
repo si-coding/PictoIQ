@@ -21,7 +21,6 @@ void main() {
 
     double left(String text) => tester.getTopLeft(find.text(text)).dx;
     final edge = left('How long a moment can last');
-    expect(left('Which photos to include'), edge);
     expect(left('Documents and screenshots of pages'), edge);
     expect(left('Photos shown per moment'), edge);
     expect(left('Smiles and candid shots'), edge);

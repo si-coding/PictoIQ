@@ -13,7 +13,7 @@ abstract final class Brand {
   static const iconBackground = Color(0xFF014135);
 
   /// The tagline font: Poppins Medium Italic (assets/fonts, SIL Open Font
-  /// Licence).
+  /// License).
   static const taglineStyle = TextStyle(
     fontFamily: 'Poppins',
     fontStyle: FontStyle.italic,
@@ -22,8 +22,8 @@ abstract final class Brand {
   );
 }
 
-/// Adds the licence of the bundled tagline font to the app's licence page
-/// (Privacy > Open-source licences).
+/// Adds the license of the bundled tagline font to the app's license page
+/// (Privacy > Open-source licenses).
 void registerBrandLicenses() {
   LicenseRegistry.addLicense(
     () => Stream.value(
@@ -32,7 +32,7 @@ void registerBrandLicenses() {
         'Copyright 2020 The Poppins Project Authors '
         '(https://github.com/itfoundry/Poppins).\n\n'
         'This Font Software is licensed under the SIL Open Font License, '
-        'Version 1.1. The licence text is at https://openfontlicense.org',
+        'Version 1.1. The license text is at https://openfontlicense.org',
       ),
     ),
   );

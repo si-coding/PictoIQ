@@ -42,7 +42,7 @@ List<String> settingsParts(SettingsCategory category, AppSettings s) {
       s.momentWindow.label,
       if (s.momentPlace != MomentPlace.off) s.momentPlace.label,
       '${s.momentCount} photo${s.momentCount == 1 ? '' : 's'} each',
-      s.contentFilter.label,
+      'People',
     ],
     SettingsCategory.bestShot => [
       '${s.matchLevel.label} match',
@@ -90,15 +90,57 @@ List<Widget> duplicateSettingsChildren(
 /// (people, scenery, or both) and what to do with documents and screenshots.
 List<Widget> sharedPhotoSettings(AppSettings s, SettingsChanged change) => [
   settingsContentChips(s, change),
-  settingsChoice<DocumentMode>(
-    title: 'Documents and screenshots of pages',
-    values: DocumentMode.values,
-    selected: s.documentMode,
-    label: (mode) => mode.label,
-    onSelected: (mode) => change(s.copyWith(documentMode: mode)),
-    note: s.documentMode.description,
-  ),
+  documentModeChoice(s, change),
 ];
+
+/// What to do with documents and screenshots of pages.
+Widget documentModeChoice(AppSettings s, SettingsChanged change) =>
+    settingsChoice<DocumentMode>(
+      title: 'Documents and screenshots of pages',
+      values: DocumentMode.values,
+      selected: s.documentMode,
+      label: (mode) => mode.label,
+      onSelected: (mode) => change(s.copyWith(documentMode: mode)),
+      note: s.documentMode.description,
+    );
+
+/// Best moments are about people, so unlike the other tools there is no
+/// choice of photo kinds. This is information, not a control: a moment is
+/// shown only when its best photo has a clearly visible person.
+Widget momentPeopleNote() => Padding(
+  padding: const EdgeInsets.only(top: 14, bottom: 4),
+  child: Container(
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: AppColors.tint,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: AppColors.tintBorder),
+    ),
+    child: const Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.groups_outlined, size: 22, color: _green),
+        SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Always about people',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              SizedBox(height: 2),
+              Text(
+                'Only photos with a clearly visible person are shown. For places and nature, use Best shots.',
+                style: TextStyle(fontSize: 12, color: _muted),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  ),
+);
 
 /// "People" and "Scenery" can be switched on together. Neither on means every
 /// photo is considered.
@@ -153,7 +195,8 @@ Widget settingsContentChips(AppSettings s, SettingsChanged change) {
 }
 
 List<Widget> momentSettingsChildren(AppSettings s, SettingsChanged change) => [
-          ...sharedPhotoSettings(s, change),
+          momentPeopleNote(),
+          documentModeChoice(s, change),
           settingsChoice<MomentWindow>(
             title: 'How long a moment can last',
             values: MomentWindow.values,

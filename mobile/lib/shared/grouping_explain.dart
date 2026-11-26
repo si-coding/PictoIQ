@@ -47,14 +47,15 @@ List<String> explainUngrouped({
       'If you expected it to match other photos (same person, moved or posed differently), try Loose matching, which also groups shots where people moved.',
     ];
   }
-  // Best moments also lists a lone photo, but only when it is clearly good.
+  // Best moments also lists a lone photo, but only when it shows a clearly
+  // visible person and is clearly good.
   final reasons = <String>[
     'No other photo was similar enough to be part of the same moment.',
   ];
   if (features == null) {
     reasons.add('PictoIQ could not measure its quality, so it was not offered on its own.');
   } else {
-    final problems = loneShotProblems(features);
+    final problems = momentProblems(features);
     if (problems.isNotEmpty) {
       reasons.add('On its own it was not offered as a moment because:');
       reasons.addAll(problems);
